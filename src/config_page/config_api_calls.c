@@ -1029,7 +1029,6 @@ int32_t web_api_rf_dbg_get( const cJSON *in, cJSON *out ){
 
 int32_t web_api_rf_dbg_post( const cJSON *in, cJSON *out ){
     extern void lmac_rx_gain_cfg(uint32 gain);
-    int v;
     const cJSON *j;
 
     if (in == NULL || !cJSON_IsObject(in) || out == NULL) {

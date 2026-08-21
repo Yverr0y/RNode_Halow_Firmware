@@ -8,6 +8,11 @@
 #include "lib/lmac/ieee802_11_defs.h"
 #include "lib/lmac/lmac_def.h"
 #include "lib/lmac/hgic.h"
+
+/* reverse-engineered LMAC-binary signatures (mars_lmac_tx.h is not included
+ * here: its gpio_set_dir copy conflicts with hal/gpio.h from basic_include) */
+extern uint32 lmac_bknoise_get(void);
+extern void ah_rfdigicali_config_hw_bknoise(uint16_t arg0, uint16_t arg1);
 #include "lib/skb/skb.h"
 #include "lib/skb/skbuff.h"
 #include "lib/lwrb/lwrb.h"

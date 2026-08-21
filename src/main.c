@@ -61,8 +61,6 @@
 #include "halow_ack.h"
 #include "lib/net/ethphy/eth_phy.h"
 
-static struct os_work blink_wk;
-static struct os_work stats_wk;
 extern uint32_t srampool_start;
 extern uint32_t srampool_end;
 static rns_stream_decoder_t tcp_rns_decoder;
@@ -74,7 +72,8 @@ extern struct hguart uart1;
 #include <stdint.h>
 
 // TCP -> RF
-static int32_t rns_tcp_rx_handler( uint8_t *data, uint16_t len ){
+static int32_t rns_tcp_rx_handler( uint8_t *data, uint16_t len, void *user ){
+    (void)user;
     log_trace("rns package received len=%d", len);
     /* TX radio stats are registered at the RADIO layer (halow_pkg_handler.c),
      * not here: counting TCP-ingress packets skews TX vs RX accounting. */
@@ -327,8 +326,6 @@ bool boot_recovery_check( void ){
     return false;
 }
 
-static struct os_work blink_wk;
-static struct os_work stats_wk;
 
 __init int main(void) {
     extern uint32 __sinit, __einit;

@@ -154,7 +154,6 @@ int32_t rns_link_db_package_register( const rns_link_packet_info_t *pkg,
     bool mac_changed = false;
     bool mtu_changed = false;
     rns_link_db_state_t prev_state;
-    const char *dir = (direction == RNS_PACKET_DIRECTION_RX) ? "rx" : "tx";
 
     if( pkg == NULL ){
         return RNS_RET_NULLPTR;

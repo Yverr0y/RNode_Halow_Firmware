@@ -16,6 +16,7 @@
 #include "utils.h"
 #include "cJSON.h"
 #include "lib/logc/log.h"
+#include "mac_generator.h"
 
 #define TELEMETRY_CONFIG_PREFIX                 CONFIGDB_ADD_MODULE("tlm")
 #define TELEMETRY_CONFIG_ADD_CONFIG(name)       TELEMETRY_CONFIG_PREFIX "." name

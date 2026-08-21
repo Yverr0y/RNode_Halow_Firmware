@@ -136,8 +136,10 @@ void halow_tx_dbg_get( halow_tx_dbg_t *out ){
         extern float halow_lbt_airtime_get(void);
         int32_t at = (int32_t)(halow_lbt_airtime_get() * 1000.0f);
         int32_t cu = (int32_t)(halow_lbt_ch_util_get() * 1000.0f);
-        if( at > 2550 ) at = 2550;  if( at < 0 ) at = 0;
-        if( cu > 2550 ) cu = 2550;  if( cu < 0 ) cu = 0;
+        if( at > 2550 ) at = 2550;
+        if( at < 0 ) at = 0;
+        if( cu > 2550 ) cu = 2550;
+        if( cu < 0 ) cu = 0;
         out->airtime_pct_x10 = (uint8_t)((at + 5) / 10);
         out->ch_util_pct_x10 = (uint8_t)((cu + 5) / 10);
     }

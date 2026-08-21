@@ -22,6 +22,9 @@
 #include "drv_timer.h"
 #include "soc.h"
 
+/* defined in the CSI driver blobs; no public header declares it */
+extern uint32_t drv_get_sys_freq(void);
+
 // #define TIM_DBG
 
 #ifndef CONFIG_LPM_TICKLESS_SYSTIM

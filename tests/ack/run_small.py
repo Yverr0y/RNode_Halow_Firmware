@@ -13,6 +13,7 @@ install; additionally, if `git` is on PATH, its usr/bin is prepended
 (stopBuildAfterFailed: true in eide.yml).
 """
 import os
+import time
 import shutil
 import string
 import subprocess
@@ -83,9 +84,33 @@ def main():
         return 1
 
     print('[small-tests] running host suite via %s' % make)
-    rc = subprocess.call([make, 'run'], cwd=HERE, env=env)
+
+    def run_make(*args):
+        proc = subprocess.Popen([make] + list(args), cwd=HERE, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, errors='replace')
+        lines = []
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            lines.append(line)
+        return proc.wait(), lines
+
+    rc, lines = run_make('run')
     if rc != 0:
-        print('[small-tests] FAILED (rc=%d) - firmware build aborted' % rc)
+        # incremental-build artifacts can be locked by AV scanners or stale
+        # processes on Windows right after a big build; pause, then one clean
+        # retry separates that from a real regression before we abort
+        print('[small-tests] run failed (rc=%d) - tail of the build log:' % rc)
+        sys.stdout.writelines(lines[-30:])
+        print('[small-tests] one clean rebuild attempt in 3 s ...')
+        time.sleep(3)
+        subprocess.call([make, 'clean'], cwd=HERE, env=env)
+        rc, lines = run_make('run')
+    if rc != 0:
+        print('[small-tests] FAILED (rc=%d) - tail of the build log:' % rc)
+        sys.stdout.writelines(lines[-30:])
+        print('[small-tests] firmware build aborted')
     return rc
 
 if __name__ == '__main__':

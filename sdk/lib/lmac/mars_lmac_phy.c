@@ -21,6 +21,12 @@
 #include "osal/semaphore.h"
 #include "halow.h"   /* halow_tx_dbg_t (TX-wedge diagnostics) */
 
+/* aliased word views into structs/frame buffers (register idioms); the
+ * may_alias attribute keeps the direct load/store codegen but drops the
+ * strict-aliasing UB warning */
+typedef uint16_t __attribute__((may_alias)) ma_u16_t;
+typedef uint32_t __attribute__((may_alias)) ma_u32_t;
+
 void lmac_check_tx_queue_empty(void);
 /* Original binary TX functions (renamed via the WRAP mechanism in
  * mars_lmac_tx_orig.c); used as fallbacks for states without a C rewrite. */
@@ -187,7 +193,7 @@ int32 lmac_send_data_to_phy(uint32 ac)
         return -1;
     }
 
-    rate_flags = *(uint16_t *)&aggr->rate_cfg;
+    rate_flags = *(ma_u16_t *)&aggr->rate_cfg;
     /* bits[9:6] of the frame descriptor are the 4-bit TXVEC format (14 for
      * S1G 1 MHz): a 3-bit extraction skewed Duration/NAV by 8 symbols. */
     duration = lmac_hdr_dur_calc((aggr->symbol_len + ((rate_flags & 0x03ffu) >> 6)) * 40u);
@@ -706,8 +712,8 @@ void lmac_irq_tx_end(void)
     /* Faithful exit cleanup (orig tx_end): clear bit 13 of the halfwords
      * inside the ACK/BA response templates (0x90E/0x91E in ah_lmac_tx) --
      * NOT bo_nav_ctrl bit 13. */
-    *(uint16_t *)&ah_lmac.ack_resp_frame[10] &= (uint16_t)~0x2000u;
-    *(uint16_t *)&ah_lmac.ba_resp_frame[10] &= (uint16_t)~0x2000u;
+    *(ma_u16_t *)&ah_lmac.ack_resp_frame[10] &= (uint16_t)~0x2000u;
+    *(ma_u16_t *)&ah_lmac.ba_resp_frame[10] &= (uint16_t)~0x2000u;
 }
 
 /* Mark the first frame in the current AC aggregate as done.
@@ -1093,7 +1099,7 @@ do_complete:
                 if (sta_p != NULL &&
                     (*(sta_p + 0x6B) & 0x02) &&
                     (txd->frame_type_lo & 0x1C) == 0x08 &&
-                    (*(uint16_t *)&txd->frame_type_lo & 0xE0) == 0x80) {
+                    (*(ma_u16_t *)&txd->frame_type_lo & 0xE0) == 0x80) {
                     txd->tx_flags = (txd->tx_flags & 0xF7u) | 0x08u;
                     txd->_reserved_29 = acked; /* 0 */
                     txd->retry_count = acked;  /* 0 */
@@ -1102,7 +1108,7 @@ do_complete:
                 }
             } else {
                 if ((txd->frame_type_lo & 0x1C) == 0x08 &&
-                    (*(uint16_t *)&txd->frame_type_lo & 0xE0) == 0x80)
+                    (*(ma_u16_t *)&txd->frame_type_lo & 0xE0) == 0x80)
                     log_debug("acked.null");
             }
 
@@ -1132,7 +1138,7 @@ do_complete:
         }
 
         /* Clear aggr flags bit 2 (AGGR_CTRL_START) */
-        *(uint16_t *)&ac_aggr(ac)->rate_cfg &= ~0x0400u;
+        *(ma_u16_t *)&ac_aggr(ac)->rate_cfg &= ~0x0400u;
     }
 
     if (completed != 0) {
@@ -1230,18 +1236,18 @@ void *lmac_gen_txvec(uint32_t ac, uint32_t bw_hint, uint32_t mcs)
     if (txvec_type == 1) {
         /* S1G Short format */
         cw_lo[0] |= 0x01;
-        *(uint16_t *)&aggr->rate_cfg = (*(uint16_t *)&aggr->rate_cfg & 0xFC3F) | 0x0180;
+        *(ma_u16_t *)&aggr->rate_cfg = (*(ma_u16_t *)&aggr->rate_cfg & 0xFC3F) | 0x0180;
 
         cw_lo[0] = (cw_lo[0] & 0xE3) |
                     (uint8_t)((txd->tx_ctrl >> 6) & 1) << 2 |
                     (uint8_t)((aggr->txvec.flags0 >> 6) & 3u) << 3;   /* 2-bit bw: binary zext 7,6 */
 
-        uint16_t dur_val = *(uint16_t *)&txi[0x30];
+        uint16_t dur_val = *(ma_u16_t *)&txi[0x30];
         if ((cw_lo[0] & 0x04) == 0)
             dur_val = (uint16_t)((dur_val & 0x3F) << 3) | (ah_lmac.s1g_operation_bits & 0x07);
 
-        *(uint16_t *)&cw_lo[0] =
-            (*(uint16_t *)&cw_lo[0] & 0x007F) | (uint16_t)(dur_val << 7);
+        *(ma_u16_t *)&cw_lo[0] =
+            (*(ma_u16_t *)&cw_lo[0] & 0x007F) | (uint16_t)(dur_val << 7);
 
         cw_lo[2] = (cw_lo[2] & 0x82) |
                     (txd->bw_cfg & 0x01) | 0x04 |
@@ -1257,13 +1263,13 @@ void *lmac_gen_txvec(uint32_t ac, uint32_t bw_hint, uint32_t mcs)
         cw_hi[0] = (tmp & 0xDF);
     } else if (txvec_type == 0) {
         /* S1G 1 MHz format */
-        *(uint16_t *)&aggr->rate_cfg = (*(uint16_t *)&aggr->rate_cfg & 0xFC3F) | 0x0380;
+        *(ma_u16_t *)&aggr->rate_cfg = (*(ma_u16_t *)&aggr->rate_cfg & 0xFC3F) | 0x0380;
 
         cw_lo[0] = (cw_lo[0] & 0xAB) |
                     (uint8_t)((txd->bw_cfg & 0x01) << 2) | 0x50;
 
-        *(uint16_t *)&cw_lo[0] =
-            (*(uint16_t *)&cw_lo[0] & 0xF87F) |
+        *(ma_u16_t *)&cw_lo[0] =
+            (*(ma_u16_t *)&cw_lo[0] & 0xF87F) |
             (uint16_t)(mcs_nib << 7);
 
         cw_lo[1] = (cw_lo[1] & 0xF7) | 0x08;
@@ -1279,18 +1285,18 @@ void *lmac_gen_txvec(uint32_t ac, uint32_t bw_hint, uint32_t mcs)
                     (ah_lmac.resp_ind_ctrl & 0x01);
     } else if (txvec_type == 2) {
         /* S1G >=2 MHz format */
-        *(uint16_t *)&aggr->rate_cfg = (*(uint16_t *)&aggr->rate_cfg & 0xFC3F) | 0x0200;
+        *(ma_u16_t *)&aggr->rate_cfg = (*(ma_u16_t *)&aggr->rate_cfg & 0xFC3F) | 0x0200;
 
         cw_lo[0] = (cw_lo[0] & 0xE3) |
                     (uint8_t)((txd->tx_ctrl >> 6) & 1) << 2 |
                     (uint8_t)((aggr->txvec.flags0 >> 6) & 3u) << 3;   /* 2-bit bw: binary zext 7,6 */
 
-        uint16_t dur_val = *(uint16_t *)&txi[0x30];
+        uint16_t dur_val = *(ma_u16_t *)&txi[0x30];
         if ((cw_lo[0] & 0x04) == 0)
             dur_val = (uint16_t)((dur_val & 0x3F) << 3) | (ah_lmac.s1g_operation_bits & 0x07);
 
-        *(uint16_t *)&cw_lo[0] =
-            (*(uint16_t *)&cw_lo[0] & 0x007F) | (uint16_t)(dur_val << 7);
+        *(ma_u16_t *)&cw_lo[0] =
+            (*(ma_u16_t *)&cw_lo[0] & 0x007F) | (uint16_t)(dur_val << 7);
 
         cw_lo[2] = (cw_lo[2] & 0x82) |
                     (txd->bw_cfg & 0x01) | 0x04 |
@@ -1310,11 +1316,11 @@ void *lmac_gen_txvec(uint32_t ac, uint32_t bw_hint, uint32_t mcs)
     if ((txd->tx_flags & 0x40) != 0) {
         ah_lmac.beacon_airtime = (int16_t)(
             (aggr->txvec.tx_symbol_len +
-             ((*(uint16_t *)&aggr->rate_cfg & 0x03FF) >> 6)) * 0x28);
+             ((*(ma_u16_t *)&aggr->rate_cfg & 0x03FF) >> 6)) * 0x28);
     }
 
     /* Mark TXVEC valid (aggr_hdr_ctrl bit 10) */
-    *(uint16_t *)&aggr->rate_cfg = (*(uint16_t *)&aggr->rate_cfg & 0xFBFF) | 0x0400;
+    *(ma_u16_t *)&aggr->rate_cfg = (*(ma_u16_t *)&aggr->rate_cfg & 0xFBFF) | 0x0400;
 
     return &aggr->txvec;
 }
@@ -1396,7 +1402,7 @@ int32_t lmac_tx_pwr_sel(void *txi_ptr, uint32_t mcs)
     } else {
         int8_t rssi = (int8_t)((uint8_t *)&ah_lmac.last_rx_pv0_ctrl_info)[3];
         /* binary: 32-bit load at 0x36C, zext bits[21:14] -> 8-bit threshold */
-        int threshold = (int)((*(uint32_t *)&ah_lmac.tx_power_config >> 14) & 0xFFu);
+        int threshold = (int)((*(ma_u32_t *)&ah_lmac.tx_power_config >> 14) & 0xFFu);
 
         if (rssi < threshold || (ah_lmac.bo_nav_ctrl & 0x02)) {
             pwr = tx_pwr_adjust_by_mcs((ah_lmac.tx_power_config >> 5) & 0x1F, mcs);   /* 5-bit (was raw &0x1F) */
@@ -1436,7 +1442,7 @@ int32_t lmac_update_frm_tx_vec(void)
     }
 
     lmac_tx_ctx_buff *aggr = ac_aggr(ac);
-    if (!(*(uint16_t *)&aggr->rate_cfg & 0x0400u))
+    if (!(*(ma_u16_t *)&aggr->rate_cfg & 0x0400u))
         log_debug("txvec not valid");
 
     ah_lmac_tx.pPv0_txvec = (uint8_t *)&aggr->txvec;
@@ -1462,10 +1468,10 @@ uint32_t pv0_ctrl_uplink_txpwr_gen(void)
         uint8_t b = tv[8];
         if (ah_lmac.sta0_added_or_assoc_flag == 1) {   /* STA mode */
             tv[8] = (b & 0xFB) | 0x04;
-            *(uint16_t *)&tv[8] &= 0x7F;
+            *(ma_u16_t *)&tv[8] &= 0x7F;
         } else {
             tv[8] &= 0xFB;
-            *(uint16_t *)&tv[8] = (*(uint16_t *)&tv[8] & 0x7F) | (uint16_t)((ah_lmac.s1g_operation_bits & 0x07) << 7);
+            *(ma_u16_t *)&tv[8] = (*(ma_u16_t *)&tv[8] & 0x7F) | (uint16_t)((ah_lmac.s1g_operation_bits & 0x07) << 7);
         }
     } else if (fmt == 0x08) {
         /* S1G >=2 MHz format */
@@ -1474,7 +1480,7 @@ uint32_t pv0_ctrl_uplink_txpwr_gen(void)
             tv[8] = (b & 0xFB) | 0x04;
         } else {
             tv[8] &= 0xFB;
-            *(uint16_t *)&tv[8] = (*(uint16_t *)&tv[8] & 0x7F) | (uint16_t)((ah_lmac.s1g_operation_bits & 0x07) << 7);
+            *(ma_u16_t *)&tv[8] = (*(ma_u16_t *)&tv[8] & 0x7F) | (uint16_t)((ah_lmac.s1g_operation_bits & 0x07) << 7);
         }
     }
 
@@ -1496,7 +1502,7 @@ int32_t lmac_tx_ack(struct sk_buff *skb)
 
     if (!(ah_lmac.tx_ac_state_flags & 0x40)) {
         uint16_t dur = lmac_hdr_dur_calc(ah_lmac.tx_symbol_duration);
-        *(uint16_t *)&ah_lmac.ack_resp_frame[2] = dur;
+        *(ma_u16_t *)&ah_lmac.ack_resp_frame[2] = dur;
         lhw_cfg_dma_list_cnt(1);
         lhw_cfg_tx_sub_frm(ah_lmac.tx_ac_state_flags & 0x40, (uint32_t)ah_lmac.ack_resp_frame, 0x10);
         LMAC_HW->TX_BYTCNT = 0x14;
@@ -1533,8 +1539,9 @@ uint32 lmac_bknoise_get(void)
     /* Refresh gain ref + base offset from PHY registers.
      * Actual signature: void ah_wphy_rx_gain_para_get(void *dst6, void *dst1)
      * Header declares wrong prototype, cast to fix. */
-    ((void(*)(void *, void *))ah_wphy_rx_gain_para_get)(
-        ah_lmac.bknoise_gain_ref, &ah_lmac.bknoise_base_offset);
+    void (*rx_gain_para_get)(void *, void *) =
+        (void (*)(void *, void *))&ah_wphy_rx_gain_para_get;
+    rx_gain_para_get(ah_lmac.bknoise_gain_ref, &ah_lmac.bknoise_base_offset);
 
     uint32 gain_idx = agc_info & 0xFu;
     if (gain_idx > 5u)
@@ -1777,8 +1784,8 @@ int32 lmac_update_pv0_wpcts_tx_vec(void)
  * -------------------------------------------------------------------------- */
 int32 lmac_update_ndp_cts_tx_vec(uint32 arg0, uint32 arg1)
 {
-    *(uint32_t *)&ah_lmac_tx.pTx_vector_cache[10] = arg0;
-    *(uint32_t *)&ah_lmac_tx.pTx_vector_cache[14] = arg1;
+    *(ma_u32_t *)&ah_lmac_tx.pTx_vector_cache[10] = arg0;
+    *(ma_u32_t *)&ah_lmac_tx.pTx_vector_cache[14] = arg1;
     if (!(ah_lmac.beacon_s1g_format_flags & 1)) {
         ah_lmac_tx.pTx_vector_cache[3] = (ah_lmac_tx.pTx_vector_cache[3] & 0xfc) | (uint8_t)(arg0 >> 30);
         ah_lmac_tx.pTx_vector_cache[14] = (ah_lmac_tx.pTx_vector_cache[14] & 0xdf) | 0x20;
@@ -1792,8 +1799,8 @@ int32 lmac_update_ndp_cts_tx_vec(uint32 arg0, uint32 arg1)
 
 int32 lmac_update_ndp_ack_tx_vec(uint32 arg0, uint32 arg1)
 {
-    *(uint32_t *)&ah_lmac_tx.pTx_vector_cache[26] = arg0;
-    *(uint32_t *)&ah_lmac_tx.pTx_vector_cache[30] = arg1;
+    *(ma_u32_t *)&ah_lmac_tx.pTx_vector_cache[26] = arg0;
+    *(ma_u32_t *)&ah_lmac_tx.pTx_vector_cache[30] = arg1;
     if (!(ah_lmac.beacon_s1g_format_flags & 1)) {
         ah_lmac_tx.pTx_vector_cache[30] = (ah_lmac_tx.pTx_vector_cache[30] & 0xdf) | 0x20;
     } else {

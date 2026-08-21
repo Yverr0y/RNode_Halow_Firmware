@@ -1126,6 +1126,12 @@ uint8 lmac_dialog_token_next(void);
  * SKB Utility Functions (external declarations)
  */
 
+/* forward decls: these param-list structs live in OSAL/SKB headers that this
+ * header deliberately does not pull in */
+struct os_semaphore;
+struct os_task;
+struct skb_list;
+
 extern int32 os_sema_up(struct os_semaphore *sem);
 extern int32 skb_list_init(struct skb_list *list);
 extern uint32 skb_list_count(struct skb_list *list);

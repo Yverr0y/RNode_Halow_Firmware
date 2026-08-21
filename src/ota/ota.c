@@ -28,6 +28,7 @@
 #include "basic_include.h"
 #include "device.h"
 #include "utils.h"
+#include "mac_generator.h"
 
 typedef struct {
     bool     active;
