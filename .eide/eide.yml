@@ -1,5 +1,5 @@
 version: "4.1"
-name: TXW8301-PHY
+name: RNode_Halow_Firmware
 type: ANY-GCC
 deviceName: null
 packDir: null
@@ -155,7 +155,7 @@ targets:
     uploadConfigMap:
       Custom:
         bin: ""
-        commandLine: python ${workspaceFolder}/utils/flash.py --elf ${OutDir}/${ProjectName}.elf
+        commandLine: python ${workspaceFolder}/flash.py --elf ${OutDir}/${ProjectName}.elf
         eraseChipCommand: ""
       JLink:
         baseAddr: ""
@@ -306,7 +306,7 @@ targets:
     uploadConfigMap:
       Custom:
         bin: ""
-        commandLine: python ${workspaceFolder}/utils/flash.py --elf ${OutDir}/${ProjectName}.elf
+        commandLine: python ${workspaceFolder}/flash.py --elf ${OutDir}/${ProjectName}.elf
         eraseChipCommand: ""
       JLink:
         baseAddr: ""
