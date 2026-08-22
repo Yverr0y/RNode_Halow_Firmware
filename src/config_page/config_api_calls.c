@@ -1599,6 +1599,14 @@ int32_t web_api_reticulum_links_get( const cJSON *in, cJSON *out ){
     uint8_t i;
     uint8_t j;
 
+    /* The full table is 255 links; a complete dump once grew a cJSON tree so
+     * large the API task ran out of heap and the endpoint answered 500 with
+     * the dashboard down. Emit only the NEWEST rows: bounded tree, and the
+     * fresh links are exactly the ones the dashboard cares about. */
+#define LINKS_API_MAX_ROWS 64u
+    struct { int32_t t; uint8_t idx; } top[LINKS_API_MAX_ROWS];
+    uint8_t ntop = 0;
+
     extern volatile uint32_t g_dbg_rns_rx_calls;
     extern volatile uint32_t g_dbg_rns_rx_parse_fail;
     extern volatile uint32_t g_dbg_rns_rx_valid;
@@ -1642,17 +1650,49 @@ int32_t web_api_reticulum_links_get( const cJSON *in, cJSON *out ){
         cJSON_AddNumberToObject(out, "fsm_stat", (double)fsm);
     }
 
-    /* Dump every known Reticulum link with the learned neighbour MAC. */
+    /* Dump the newest known Reticulum links with the learned neighbour MAC. */
     count = rns_link_db_link_count_get();
+    cJSON_AddNumberToObject(out, "total", (double)count);
+
+    /* pass 1: keep the LINKS_API_MAX_ROWS highest activity stamps (ascending
+     * insertion; top[0] is the oldest of the kept set) */
     for (i = 0; i < count; i++) {
+        int32_t t;
+        uint8_t k;
+
         if (!rns_link_db_link_snapshot_by_index(i, &link)) {
+            continue;
+        }
+        t = (link.lastrx_timestamp_s > link.lasttx_timestamp_s)
+            ? link.lastrx_timestamp_s : link.lasttx_timestamp_s;
+
+        if (ntop < LINKS_API_MAX_ROWS) {
+            for (k = ntop; k > 0 && top[k - 1u].t > t; k--) {
+                top[k] = top[k - 1u];
+            }
+            top[k].t = t;
+            top[k].idx = i;
+            ntop++;
+        } else if (t > top[0].t) {
+            for (k = 1; k < LINKS_API_MAX_ROWS && top[k].t < t; k++) {
+                top[k - 1u] = top[k];
+            }
+            top[k - 1u].t = t;
+            top[k - 1u].idx = i;
+        }
+    }
+
+    /* pass 2: emit newest first */
+    for (j = 0; j < ntop; j++) {
+        uint8_t col;
+        if (!rns_link_db_link_snapshot_by_index(top[ntop - 1u - j].idx, &link)) {
             continue;
         }
 
         /* Skip unanswered outbound LINKREQUESTs: no learned MAC, no peer info. */
         bool mac_unknown = true;
-        for (j = 0; j < 6; j++) {
-            if (link.remote_mac[j] != RNS_LINK_MAC_UNKNOWN_BYTE) {
+        for (col = 0; col < 6; col++) {
+            if (link.remote_mac[col] != RNS_LINK_MAC_UNKNOWN_BYTE) {
                 mac_unknown = false;
                 break;
             }
@@ -1661,13 +1701,13 @@ int32_t web_api_reticulum_links_get( const cJSON *in, cJSON *out ){
             continue;
         }
 
-        for (j = 0; j < RNS_LINK_ID_LEN; j++) {
-            sprintf(id_hex + j * 2, "%02X", link.id[j]);
+        for (col = 0; col < RNS_LINK_ID_LEN; col++) {
+            sprintf(id_hex + col * 2, "%02X", link.id[col]);
         }
         id_hex[RNS_LINK_ID_LEN * 2] = '\0';
 
-        for (j = 0; j < RNS_TRUNCATED_HASH_LEN; j++) {
-            sprintf(dest_hex + j * 2, "%02X", link.destination[j]);
+        for (col = 0; col < RNS_TRUNCATED_HASH_LEN; col++) {
+            sprintf(dest_hex + col * 2, "%02X", link.destination[col]);
         }
         dest_hex[RNS_TRUNCATED_HASH_LEN * 2] = '\0';
 
