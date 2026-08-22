@@ -13,6 +13,9 @@
 #define GP_PROBE_MAX_PROD    2
 #define GP_STABLE4_EXIT_PCT  30
 #define GP_STABLE4_EXIT_WIN  10u
+/* debris persisting this many windows at 4x threshold justifies a gain
+ * switch even mid-session (see halow_gain_pilot_tick) */
+#define GP_DEBRIS_EMERGENCY_WIN  2u
 
 extern void lmac_rx_gain_cfg(uint32 gain);
 extern volatile uint32_t g_rx_cls_internal, g_rx_cls_notmine, g_rx_cls_data;
@@ -93,6 +96,9 @@ void halow_gain_pilot_dbg(int32_t *debris_x, int32_t *prod_x, int32_t *base_x)
 void halow_gain_pilot_tick(void)
 {
     static uint32_t last_rx_good, last_cls;
+    /* Consecutive windows with catastrophic debris: the only justification
+     * for touching RX gain while a session is active. */
+    static uint8_t hot_windows;
 
     if (!g_gp_enabled) {
         return;
@@ -117,6 +123,17 @@ void halow_gain_pilot_tick(void)
     g_gp_debris_x = debris;
     g_gp_prod_x = prod;
 
+    /* A gain switch sheds the frames already in flight -- but STAYING on a
+     * swamped gain sheds every frame until further notice. So the debris
+     * escape (G5 -> TRIAL4, two strike windows) always fires; only the
+     * optional tuning flips (revert / starve-exit / probe-exit) wait for an
+     * idle link. Between sessions the pilot adapts exactly as before
+     * (never disabled). */
+    hot_windows = (debris > (int32_t)GP_DEBRIS_THRESH)
+                  ? (uint8_t)(hot_windows + 1u) : 0u;
+    bool may_switch = !halow_ack_link_busy() ||
+                      hot_windows >= GP_DEBRIS_EMERGENCY_WIN;
+
     switch (g_gp_state) {
     case GP_G5:
         if (gp_cur_gain() != 5u) {
@@ -139,8 +156,11 @@ void halow_gain_pilot_tick(void)
     case GP_TRIAL4:
         if (g_gp_prod_base_x > 0 &&
             prod * 100 < g_gp_prod_base_x * (int32_t)GP_PROD_KEEP_PCT) {
-            g_gp_state = GP_G5;
-            gp_set_gain(5);
+            /* revert only when the link can afford the switch */
+            if (may_switch) {
+                g_gp_state = GP_G5;
+                gp_set_gain(5);
+            }
         } else {
             g_gp_state = GP_STABLE4;
             gp_stable4_s = 0;
@@ -155,7 +175,7 @@ void halow_gain_pilot_tick(void)
         }
         if (g_gp_prod_base_x > 0 &&
             prod * 100 < g_gp_prod_base_x * (int32_t)GP_STABLE4_EXIT_PCT) {
-            if (++gp_starve_windows >= GP_STABLE4_EXIT_WIN) {
+            if (++gp_starve_windows >= GP_STABLE4_EXIT_WIN && may_switch) {
                 gp_starve_windows = 0;
                 g_gp_state = GP_G5;
                 gp_set_gain(5);
@@ -175,6 +195,9 @@ void halow_gain_pilot_tick(void)
     case GP_PROBE5:
         if (prod > g_gp_prod_base_x) {
             g_gp_prod_base_x = prod;
+        }
+        if (!may_switch) {
+            break;   /* keep sampling; revert when the link affords it */
         }
         if (debris > GP_DEBRIS_THRESH) {
             g_gp_state = GP_STABLE4;
