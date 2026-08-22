@@ -887,16 +887,16 @@ int32_t web_api_radio_stat_get( const cJSON *in, cJSON *out ){
     snprintf(buf, sizeof(buf), "%.2f kbit/s", v);
     (void)cJSON_AddStringToObject(out, "tx_speed", buf);
 
-    (void)snprintf(buf, sizeof(buf), "%.1f %%", (double)(st.airtime*100.0f));
+    (void)snprintf(buf, sizeof(buf), "%u %%", (unsigned)((st.airtime*100.0f) + 0.5f));
     (void)cJSON_AddStringToObject(out, "airtime", buf);
 
-    (void)snprintf(buf, sizeof(buf), "%.1f %%", (double)(st.ch_util*100.0f));
+    (void)snprintf(buf, sizeof(buf), "%u %%", (unsigned)((st.ch_util*100.0f) + 0.5f));
     (void)cJSON_AddStringToObject(out, "ch_util", buf);
 
-    (void)snprintf(buf, sizeof(buf), "%.1f dBm", (double)st.bkgnd_noise_dbm);
+    (void)snprintf(buf, sizeof(buf), "%.0f dBm", (double)st.bkgnd_noise_dbm);
     (void)cJSON_AddStringToObject(out, "bg_pwr_dbm", buf);
-    
-    (void)snprintf(buf, sizeof(buf), "%.1f dBm", (double)st.bkgnd_noise_dbm_now);
+
+    (void)snprintf(buf, sizeof(buf), "%.0f dBm", (double)st.bkgnd_noise_dbm_now);
     (void)cJSON_AddStringToObject(out, "bg_pwr_now_dbm", buf);
 
     return WEB_API_RC_OK;
@@ -1042,6 +1042,7 @@ int32_t web_api_rf_dbg_get( const cJSON *in, cJSON *out ){
       cJSON_AddNumberToObject(out, "gain_pilot_debris_x", (double)debris);
       cJSON_AddNumberToObject(out, "gain_pilot_prod_x", (double)prod);
       cJSON_AddNumberToObject(out, "gain_pilot_base_x", (double)base); }
+      cJSON_AddNumberToObject(out, "ed_busy_pct", (double)halow_lbt_ed_busy_pct_get());
     return WEB_API_RC_OK;
 }
 
@@ -1484,8 +1485,8 @@ int32_t web_api_ack_cfg_get( const cJSON *in, cJSON *out ){
     cJSON_AddNumberToObject(out, "retries",  (double)cfg.max_retries);
     cJSON_AddNumberToObject(out, "timeout_ms", (double)cfg.timeout_ms);
     cJSON_AddNumberToObject(out, "rate_adapt", (double)cfg.rate_adapt);
-    cJSON_AddNumberToObject(out, "ra_loss_up",   (double)cfg.ra_loss_up);
-    cJSON_AddNumberToObject(out, "ra_loss_down", (double)cfg.ra_loss_down);
+    /* ra_loss_up/ra_loss_down are deliberately NOT exposed: the user may
+     * switch adaptation on/off but does not tune its thresholds. */
     cJSON_AddNumberToObject(out, "window",   (double)cfg.window);
     cJSON_AddNumberToObject(out, "fids",     (double)cfg.ack_fids);
     cJSON_AddNumberToObject(out, "agg",      (double)cfg.agg);
@@ -1530,7 +1531,19 @@ int32_t web_api_ack_cfg_get( const cJSON *in, cJSON *out ){
         cJSON_AddNumberToObject(out, "ra_blk_loss",    (double)st.ra_blocked_loss);
         cJSON_AddNumberToObject(out, "ra_blk_gap",     (double)st.ra_blocked_gap);
         cJSON_AddNumberToObject(out, "ra_blk_max",     (double)st.ra_blocked_max);
+        cJSON_AddNumberToObject(out, "ra_blk_probe",   (double)st.ra_blk_probe);
         cJSON_AddNumberToObject(out, "bc_repeats",     (double)st.bc_repeats);
+        cJSON_AddNumberToObject(out, "dbg_path_bc",    (double)st.dbg_path_bc);
+        cJSON_AddNumberToObject(out, "dbg_path_plain", (double)st.dbg_path_plain);
+        cJSON_AddNumberToObject(out, "dbg_path_bundle",(double)st.dbg_path_bundle);
+        cJSON_AddNumberToObject(out, "dbg_path_plainl",(double)st.dbg_path_plainl);
+        {
+            char mac[18];
+            snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     st.dbg_last_dest[0], st.dbg_last_dest[1], st.dbg_last_dest[2],
+                     st.dbg_last_dest[3], st.dbg_last_dest[4], st.dbg_last_dest[5]);
+            cJSON_AddStringToObject(out, "dbg_last_dest", mac);
+        }
     }
 #endif
     return WEB_API_RC_OK;
@@ -1545,8 +1558,7 @@ int32_t web_api_ack_cfg_post( const cJSON *in, cJSON *out ){
      * firmware-tuned (agg sizing is done by halow_ack_eff_agg_bytes). */
     if (json_get_int(in, "retries",  &v)) { if (v >= 0 && v <= 8) cfg.max_retries = (uint8_t)v; }
     if (json_get_int(in, "rate_adapt", &v)) { cfg.rate_adapt = (uint8_t)(v ? 1u : 0u); }
-    if (json_get_int(in, "ra_loss_up",   &v)) { if (v >= 0 && v <= 100) cfg.ra_loss_up   = (uint8_t)v; }
-    if (json_get_int(in, "ra_loss_down", &v)) { if (v >= 0 && v <= 100) cfg.ra_loss_down = (uint8_t)v; }
+    /* ra_loss_up/ra_loss_down are firmware-tuned (5/20): not settable. */
     if (json_get_int(in, "agg",    &v)) { cfg.agg = (uint8_t)(v ? 1u : 0u); }
     if (json_get_int(in, "window", &v)) { if (v >= 4 && v <= 16) cfg.window = (uint8_t)v; }
     if (json_get_int(in, "fids",   &v)) { if (v >= 1 && v <= 32) cfg.ack_fids  = (uint8_t)v; }

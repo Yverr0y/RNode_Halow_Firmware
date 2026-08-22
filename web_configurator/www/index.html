@@ -219,7 +219,15 @@
                     <input type="number" id="ack_retries" min="0" max="8" value="3">
                 </label>
                 <p class="note">0 = NOACK (fire-and-forget). Frames that exhaust the retry budget are dropped.</p>
-                <label>
+                <label class="toggle-label" id="ra_panel">
+                    <span>Rate adaptation</span>
+                    <input type="checkbox" id="ack_rate_adapt">
+                </label>
+                <p class="note">Automatically steps the radio rate up on a clean link and down under loss. Thresholds and pacing (max 1 step per second) are tuned by the firmware.</p>
+                <p class="note panel-warn" id="ra_warn" style="display:none;color:#a00;font-weight:bold">Requires ACK: set Max retries above 0.</p>
+
+                <hr style="margin:14px 0;border:none;border-top:1px solid #ddd">
+                <label class="toggle-label">
                     <span>Frame aggregation</span>
                     <input type="checkbox" id="ack_agg" checked>
                 </label>
@@ -229,28 +237,10 @@
                     <input type="number" id="ack_bc_repeat" min="1" max="3" value="2">
                 </label>
                 <p class="note">Broadcast frames (announces, link bootstrap) get no ACK, so repeats are their only loss protection. 2 = send each broadcast twice (default), 3 = most robust (poor conditions), 1 = off.</p>
+
                 <div class="panel-actions">
                     <button type="button" id="save_ack" disabled>Save</button>
                 </div>
-            </div>
-
-            <div class="panel" id="ra_panel">
-                <h3>Rate Adaptation</h3>
-                <p class="note panel-warn" id="ra_warn" style="display:none;color:#a00;font-weight:bold">Requires ACK: set Max retries &gt; 0 in the ACK card above to enable.</p>
-                <label class="toggle-label">
-                    <span>Enable</span>
-                    <input type="checkbox" id="ack_rate_adapt">
-                </label>
-                <label>
-                    <span>Step up at loss ≤ (%)</span>
-                    <input type="number" id="ack_ra_loss_up" min="0" max="99" value="5">
-                </label>
-                <p class="note">When a peer's smoothed loss drops at/under this, TX MCS steps up (faster). Lower = aggressive "fast link".</p>
-                <label>
-                    <span>Step down at loss ≥ (%)</span>
-                    <input type="number" id="ack_ra_loss_down" min="1" max="100" value="30">
-                </label>
-                <p class="note">When a peer's smoothed loss reaches/exceeds this, TX MCS steps down (more robust). Higher = "reliable link". Must be greater than the up threshold.</p>
             </div>
 
             <div class="panel">

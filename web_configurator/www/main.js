@@ -254,7 +254,7 @@
                 ]
             },
             { group: 'privacy', btn: 'save_privacy', ids: ['privacy_mac_rotation', 'privacy_mac_broadcast'] },
-            { group: 'ack', btn: 'save_ack', ids: ['ack_retries', 'ack_rate_adapt', 'ack_ra_loss_up', 'ack_ra_loss_down', 'ack_agg', 'ack_bc_repeat'] }
+            { group: 'ack', btn: 'save_ack', ids: ['ack_retries', 'ack_rate_adapt', 'ack_agg', 'ack_bc_repeat'] }
         ];
 
         map.forEach(m => {
@@ -273,17 +273,13 @@
 
         const retriesFld = document.getElementById('ack_retries');
         const raBox = document.getElementById('ack_rate_adapt');
-        const upFld = document.getElementById('ack_ra_loss_up');
-        const dnFld = document.getElementById('ack_ra_loss_down');
         const raPanel = document.getElementById('ra_panel');
         const raWarn = document.getElementById('ra_warn');
         if (retriesFld && raBox) {
             const syncRateAdapt = () => {
                 const ackOn = (parseInt(retriesFld.value, 10) || 0) > 0;
                 if (!ackOn) raBox.checked = false;
-                const raOn = !!raBox.checked && ackOn;
-                if (upFld) upFld.disabled = !raOn;
-                if (dnFld) dnFld.disabled = !raOn;
+                raBox.disabled = !ackOn;
                 if (raPanel) raPanel.classList.toggle('disabled', !ackOn);
                 if (raWarn) raWarn.style.display = ackOn ? 'none' : 'block';
                 updateSaveButton('ack');
@@ -741,21 +737,16 @@
             const data = await res.json();
             setInput('ack_retries', data.retries != null ? data.retries : 3);
             setInput('ack_bc_repeat', data.bc_repeat != null ? data.bc_repeat : 2);
-            setInput('ack_ra_loss_up',   data.ra_loss_up   != null ? data.ra_loss_up   : 5);
-            setInput('ack_ra_loss_down', data.ra_loss_down != null ? data.ra_loss_down : 30);
             const aggBox = document.getElementById('ack_agg');
             if (aggBox) aggBox.checked = !!data.agg;
             const ra = document.getElementById('ack_rate_adapt');
-            const upFld = document.getElementById('ack_ra_loss_up');
-            const dnFld = document.getElementById('ack_ra_loss_down');
             const raPanel = document.getElementById('ra_panel');
             const raWarn = document.getElementById('ra_warn');
             const retries = Number(data.retries) || 0;
             const ackOn = retries > 0;
             const raOn = !!data.rate_adapt && ackOn;
             if (ra) ra.checked = raOn;
-            if (upFld) upFld.disabled = !raOn;
-            if (dnFld) dnFld.disabled = !raOn;
+            if (ra) ra.disabled = !ackOn;
             if (raPanel) raPanel.classList.toggle('disabled', !ackOn);
             if (raWarn) raWarn.style.display = ackOn ? 'none' : 'block';
             snapshotGroup('ack');
@@ -1626,14 +1617,10 @@
 
     function readAckForm() {
         const ra = document.getElementById('ack_rate_adapt');
-        const up = parseInt(document.getElementById('ack_ra_loss_up').value, 10);
-        const dn = parseInt(document.getElementById('ack_ra_loss_down').value, 10);
         const bcr = parseInt(document.getElementById('ack_bc_repeat').value, 10);
         return {
             retries: parseInt(document.getElementById('ack_retries').value, 10) || 0,
             rate_adapt: (ra && ra.checked && !ra.disabled) ? 1 : 0,
-            ra_loss_up:   isNaN(up) ? 5   : Math.max(0, Math.min(99, up)),
-            ra_loss_down: isNaN(dn) ? 30  : Math.max(1, Math.min(100, dn)),
             bc_repeat:    isNaN(bcr) ? 2  : Math.max(1, Math.min(3, bcr)),
             agg:    (document.getElementById('ack_agg') && document.getElementById('ack_agg').checked) ? 1 : 0
         };
