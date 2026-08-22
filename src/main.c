@@ -58,6 +58,7 @@
 #include "uart_slip.h"
 #include "net_log.h"
 #include "halow_pkg_handler.h"
+#include "halow_chload.h"
 #include "halow_ack.h"
 #include "lib/net/ethphy/eth_phy.h"
 
@@ -103,11 +104,13 @@ static void halow_rx_handler(struct hgic_rx_info *info,
                              struct ieee80211_hdr *hdr,
                              uint8 *data,
                              int32 len) {
-    (void)info;
-
     if (data == NULL || len <= 0) {
         return;
     }
+
+    /* every decoded frame occupies the channel: feed the activity-based
+     * channel-load meter before any classification drops the frame */
+    halow_chload_note_rx((uint16_t)len, info->mcs);
 
     nearby_modem_package_info_t modem_pkg_info = {
         .len = len,
@@ -124,7 +127,6 @@ static void halow_rx_handler(struct hgic_rx_info *info,
     if (!halow_ack_is_internal_frame(data, (uint16_t)len)) {
         nearby_modem_package_register(&modem_pkg_info);
         indication_led_rx();
-        statistics_radio_register_rx_package(len);
     } else {
         rx_forensics_capture(hdr, data, (uint16_t)len);
         g_rx_cls_internal++;

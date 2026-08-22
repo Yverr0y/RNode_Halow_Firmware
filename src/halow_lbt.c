@@ -22,6 +22,7 @@ extern void ah_rfdigicali_config_hw_bknoise(uint16_t arg0, uint16_t arg1);
 #include "utils.h"
 #include "configdb.h"
 #include "halow.h"
+#include "halow_chload.h"
 #include "indication.h"
 
 //#define HALOW_LBT_DEBUG
@@ -154,7 +155,12 @@ static void halow_lbt_rand_init_from_bknoise( void ){
 /* forward: defined below near the ring helpers */
 static lwrb_sz_t long_ring_valid( halow_lbt_ctx_t *ctx );
 
-float halow_lbt_ch_util_get(void){
+/* ENERGY-DETECT busy fraction of the long ring -- an LBT-tuning diagnostic.
+ * Deliberately NOT user-facing utilization: on a noisy deployment (bad
+ * antenna, -70 dBm floor) every sample reads busy and this saturates at
+ * 100% with zero stations on air. The displayed channel load comes from
+ * halow_chload (actual TX/RX airtime) instead. */
+uint8_t halow_lbt_ed_busy_pct_get(void){
     halow_lbt_ctx_t *ctx;
     uint32_t busy;
     lwrb_sz_t n;
@@ -164,20 +170,20 @@ float halow_lbt_ch_util_get(void){
 
     busy = 0;
     if(g_lbt_ctx_mutex.hdl == NULL){
-        return 0.0f;
+        return 0;
     }
     (void)os_mutex_lock(&g_lbt_ctx_mutex, -1);
 
     ctx = g_lbt_ctx;
     if (ctx == NULL) {
         (void)os_mutex_unlock(&g_lbt_ctx_mutex);
-        return 0.0f;
+        return 0;
     }
 
     n = long_ring_valid(ctx);
     if (n == 0) {
         (void)os_mutex_unlock(&g_lbt_ctx_mutex);
-        return 0.0f;
+        return 0;
     }
 
     floor   = halow_lbt_background_long_dbm_get();
@@ -195,12 +201,15 @@ float halow_lbt_ch_util_get(void){
 
     (void)os_mutex_unlock(&g_lbt_ctx_mutex);
 
-    float ch_util = ((float)busy) / (float)n;
-    float airtime = halow_lbt_airtime_get();
-    if(ch_util < airtime){
-        ch_util = airtime;
+    return (uint8_t)(((uint32_t)busy * 100u) / (uint32_t)n);
+}
+
+/* Displayed channel load: real carried traffic only. */
+float halow_lbt_ch_util_get(void){
+    if(g_lbt_ctx_mutex.hdl == NULL){
+        return 0.0f;
     }
-    return ch_util;
+    return (float)halow_chload_percent() / 100.0f;
 }
 
 static float halow_lbt_airtime_max_percentage(void){
@@ -474,6 +483,10 @@ void halow_lbt_task( void *arg ){
             if(ctx->airtime_rb_idx >= HALOW_LBT_AIRTIME_ACCUMULATOR_BUF){
                 ctx->airtime_rb_idx = 0;
             }
+
+            /* feed the activity-based channel-load meter */
+            halow_chload_note_tx_us((uint32_t)airtime_us);
+            halow_chload_cycle((uint32_t)cycle_us);
 
             ctx->airtime_time_tx_from_last_cycle_update_us = 0;
             ctx->time_last_cycle_update_us = now_us;

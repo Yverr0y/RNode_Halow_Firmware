@@ -24,6 +24,9 @@ typedef struct {
 void halow_lbt_set_tx_as_active(void);
 void halow_lbt_set_tx_as_deactive(void);
 float halow_lbt_ch_util_get(void);
+/* Energy-detect busy fraction of the long ring (LBT tuning diagnostic,
+ * saturates at 100 on a noisy quiet channel -- NOT the displayed load). */
+uint8_t halow_lbt_ed_busy_pct_get(void);
 float halow_lbt_airtime_get(void);
 void halow_lbt_tx_done_notify( void );
 int8_t halow_lbt_background_short_dbm_get( void );
