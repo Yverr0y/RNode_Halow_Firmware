@@ -1,0 +1,47 @@
+name: release
+
+# Tag push vX.Y.Zb -> build firmware, package the release tar, publish as a
+# PRERELEASE with a placeholder body (filled in manually afterwards).
+on:
+  push:
+    tags: ['v*b']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: C-SKY toolchain (csky-elfabiv2 V3.10.33, linux x86_64)
+        run: |
+          git clone --depth 1 https://github.com/I-AM-ENGINEER/csky-toolchain.git /tmp/tcrepo
+          mkdir -p "$GITHUB_WORKSPACE/tc"
+          tar xzf /tmp/tcrepo/linux/csky-elfabiv2-tools-x86_64-minilibc-20250328.tar.gz -C "$GITHUB_WORKSPACE/tc"
+          "$GITHUB_WORKSPACE/tc/bin/csky-elfabiv2-gcc" --version
+
+      - name: python alias
+        run: |
+          sudo ln -sf /usr/bin/python3 /usr/local/bin/python
+          python --version
+
+      - name: Build (host-test gate, firmware, pack)
+        run: make COMPILER_DIR="$GITHUB_WORKSPACE/tc" -j"$(nproc)"
+
+      - name: Package release tar (fw.bin + www/, plain tar)
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NAME="RNode-Halow-${TAG//./_}"
+          tar -cf "${NAME}.tar" -C out fw.bin -C out/_filesystem www
+          tar -tvf "${NAME}.tar"
+          sha256sum "${NAME}.tar" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "ASSET=${NAME}.tar" >> "$GITHUB_ENV"
+
+      - name: Publish prerelease (placeholder body)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" "$ASSET" \
+            --prerelease --title "" --notes "PLACEHOLDER"
