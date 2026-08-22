@@ -12,7 +12,7 @@
 
 #define ACK_CFG_PREFIX  CONFIGDB_ADD_MODULE("hack")
 #define ACK_CFG(k)      ACK_CFG_PREFIX "." k
-#define ACK_CFG_VER     4
+#define ACK_CFG_VER     5
 
 #define ACK_BUF_N       16u
 /* One ACK-tracked wire frame: payload sum <= HALOW_ACK_AGG_PAYLOAD_MAX
@@ -113,6 +113,10 @@ typedef struct {
     uint8_t  ack_probe_cnt;
     uint32_t l0_falls;
     jiffy_t  created_jiff;
+    /* collapse memory: the highest rate a downshift abandoned; climbs above
+     * failed_top-1 stay blocked while the collapse episode is fresh */
+    uint8_t  failed_top;
+    jiffy_t  last_collapse_jiff;
 } ack_peer_t;
 
 static halow_ack_config_t g_ack_cfg;
@@ -121,6 +125,13 @@ static struct os_mutex    g_ack_mutex;
 
 static ack_buf_t   *g_bufs[ACK_BUF_N];
 static uint8_t     g_window;
+/* Effective in-flight depth (congestion window): starts small -- a deep
+ * queue multiplies the ACK round trip and every first-retry timer fires
+ * before its ACK lands, so the air floods with duplicate copies of frames
+ * the peer already has (live 2026-08-22: w10 -> 618 retransmits per 524
+ * frames and ~60% of airtime wasted; w4 -> 816 kbit/s). Grows +1 per
+ * clean first-attempt clear, shrinks 25% per retransmit timeout. */
+static uint8_t     g_cwnd;
 static ack_peer_t  g_peers[ACK_MAX_PEERS];
 
 static uint8_t  g_used_n;
@@ -135,7 +146,6 @@ static jiffy_t g_stale_j;
 static jiffy_t g_quiet_j;
 static jiffy_t g_busy_j;
 static jiffy_t g_step_gap_j;
-static jiffy_t g_step_gap8_j;
 static jiffy_t g_dflt_ttl_j;
 static uint16_t g_ra_up_q8;
 static uint16_t g_ra_down_q8;
@@ -234,9 +244,35 @@ static void buf_release( ack_buf_t *b ){
     g_used_n--;
 }
 
+static ack_buf_t *buf_claim_inflight( const uint8_t mac[6], uint16_t wire_len );
+static uint8_t eff_window( void );
+
 static ack_buf_t *buf_claim_inflight( const uint8_t mac[6], uint16_t wire_len ){
-    if( g_inflight_n >= g_window ) return NULL;
+    if( g_inflight_n >= eff_window() ) return NULL;
     return buf_alloc(ACK_BUF_INFLIGHT, mac, wire_len);
+}
+
+/* Congestion-window governor (see g_cwnd). */
+static uint8_t eff_window( void ){
+    return ( g_cwnd < g_window ) ? g_cwnd : g_window;
+}
+
+static void cwnd_on_clean_clear( void ){
+    if( g_cwnd < g_window ) g_cwnd++;
+}
+
+static void cwnd_on_retrans_timeout( void ){
+    uint8_t floor_w = ( g_ack_cfg.window >= 2u ) ? 2u : 1u;
+    if( g_cwnd > floor_w ){
+        g_cwnd = (uint8_t)(((uint16_t)g_cwnd * 3u) / 4u);
+        if( g_cwnd < floor_w ) g_cwnd = floor_w;
+    }
+}
+
+/* Test/debug hook: pin the congestion window (host suite drives exact
+ * in-flight depths). */
+void halow_ack_cwnd_set( uint8_t v ){
+    g_cwnd = ( v > g_window ) ? g_window : v;
 }
 
 static ack_buf_t *buf_match( const uint8_t mac[6], uint16_t fid ){
@@ -279,14 +315,20 @@ static ack_peer_t *peer_find( const uint8_t mac[6] ){
     return NULL;
 }
 
-static uint8_t ra_ceiling( const ack_peer_t *p );
+static uint8_t dflt_mcs( void );
+static void dflt_mcs_refresh( void );
 
 static uint8_t peer_init_mcs( const ack_peer_t *p ){
-    uint8_t mcs;
+    (void)p;
     if( !g_ack_cfg.rate_adapt ) return HALOW_MCS_DEFAULT;
-    mcs = ( p != NULL ) ? ra_ceiling(p) : 4u;
-    if( mcs > RA_MAX_MCS ) mcs = RA_MAX_MCS;
-    return mcs;
+    /* Pin the initial / stale-reset rate to the CONFIGURED MCS. Broadcasts
+     * always ride the configured rate, so it is decodable by construction;
+     * EVM-derived ceilings are not: a single stale ACK sample pinned a peer
+     * at MCS5 while only MCS0 got through (live 2026-08-21) and every stale
+     * reset re-armed that dead rate with a wiped loss history -- a permanent
+     * silent unicast black hole. RA re-climbs from here on fresh ACKs. */
+    dflt_mcs_refresh();
+    return dflt_mcs();
 }
 
 static bool peer_is_stale( const ack_peer_t *p ){
@@ -336,6 +378,8 @@ static ack_peer_t *peer_get( const uint8_t mac[6] ){
             p->compat            = HALOW_COMPAT_LEGACY;
             p->rx_seq_seen       = false;
             p->rx_seq_win        = 0u;
+            p->failed_top        = 0u;
+            p->last_collapse_jiff = 0u;
             log_info("ack: peer %02x:%02x:%02x:%02x:%02x:%02x re-heard after stale -> MCS %u",
                      p->mac[0],p->mac[1],p->mac[2],p->mac[3],p->mac[4],p->mac[5],
                      (unsigned)init_mcs);
@@ -366,13 +410,22 @@ static void peer_rx_seq( ack_peer_t *p, uint16_t seq ){
     }
     uint16_t fwd = (uint16_t)(seq - p->rx_seq_last);
     if( fwd == 0u ) return;
-    if( fwd >= HALOW_ACK_SEQ_WINDOW ){
+    if( fwd < HALOW_ACK_SEQ_WINDOW ){
+        p->rx_seq_win = (p->rx_seq_win << fwd) | 1u;
         p->rx_seq_last = seq;
-        p->rx_seq_win  = 1u;
         return;
     }
-    p->rx_seq_win = (p->rx_seq_win << fwd) | 1u;
+    /* Backward seq: a RETRANSMISSION of something old. Treating it as a
+     * jump reset the window and un-acked every newer bundle, so the next
+     * ACK covered almost nothing and the sender re-sent delivered data --
+     * each re-arrival poisoning the window again (live: 223 deadline drops
+     * and ~50% phantom loss on a clean channel). Old seqs inside the window
+     * are already-marked duplicates: ignore them. */
+    uint16_t back = (uint16_t)(p->rx_seq_last - seq);
+    if( back < HALOW_ACK_SEQ_WINDOW ) return;
+    /* genuine far jump forward: re-sync */
     p->rx_seq_last = seq;
+    p->rx_seq_win  = 1u;
 }
 
 static void peer_note_dead_bundle( ack_peer_t *p ){
@@ -445,23 +498,22 @@ static uint32_t slot_life_ms( void ){
 
 /* ================= rate adaptation ================= */
 
-static uint8_t ra_ceiling( const ack_peer_t *p ){
-    int8_t e = p->evm_ewma_slow;
-    if( e == 0 ) e = p->evm_ewma;
-    if( e == 0 && p->last_rx_evm != 0 ) e = p->last_rx_evm;
-    if( e == 0 ) return 4u;
-    if( e >= -14 ) return 7u;
-    if( e >= -17 ) return 6u;
-    if( e >= -19 ) return 5u;
-    if( e >= -21 ) return 4u;
-    if( e >= -23 ) return 3u;
-    if( e >= -26 ) return 2u;
-    return 1u;
-}
+/* NOTE: there is deliberately NO EVM-derived ceiling or floor in RA anymore.
+ * EVM measures the modulation quality of what we RECEIVE -- a proxy for the
+ * reverse direction that behaved erratically on this radio (live: SNR 30 dB
+ * and loss 0% reported as "ceiling MCS3"). Climbs are gated by live ACK
+ * evidence only; the configured MCS is the floor. */
 
 static uint8_t ra_floor( const ack_peer_t *p ){
-    uint8_t c = ra_ceiling(p);
-    return ( c >= 3u ) ? (uint8_t)(c - 2u) : 1u;
+    (void)p;
+    /* The CONFIGURED MCS is the only rate with unconditional proof of life:
+     * every broadcast rides it, always. The old floor derived from EVM
+     * measured the REVERSE direction -- on an asymmetric link it forbade
+     * exactly the escape it should have enabled (live 2026-08-20: RA stuck
+     * at MCS1 with 60-90% retransmit loss while the EVM of received frames
+     * looked great). RA may climb above configured on live ACK evidence;
+     * it must always be able to walk back down to it. */
+    return dflt_mcs();
 }
 
 static void ra_log_mcs( const char *verb, ack_peer_t *p ){
@@ -473,6 +525,54 @@ static void ra_log_mcs( const char *verb, ack_peer_t *p ){
              (unsigned)(pct_x100 / 100u), (unsigned)(pct_x100 % 100u));
 }
 
+/* Lock held. A downshift means every inflight slot's exponential backoff is
+ * tuned for a rate that just failed -- waiting it out at the new rate wastes
+ * seconds of airtime per slot (live: a 2 s collapse cost minutes of
+ * retransmit churn). Make them all due NOW; the next tick resends them at
+ * the better-suited lower rate. */
+static void ra_kick_inflight( const ack_peer_t *p ){
+    jiffy_t due = (jiffy_t)(now_j() - ms_j(g_ack_cfg.timeout_ms) - 1u);
+    for( uint32_t i = 0; i < ACK_BUF_N; i++ ){
+        ack_buf_t *b = g_bufs[i];
+        if( b != NULL && b->state == ACK_BUF_INFLIGHT &&
+            mac_eq(b->dest_mac, p->mac) ){
+            b->tx_jiff = due;
+        }
+    }
+}
+
+/* Lock held. Remember the abandoned rate: climbing straight back into a
+ * rate that just collapsed turns one probe into a loop of collapses.
+ * Within a collapse episode (cooldown window since the last downshift) the
+ * cap is the HIGHEST rate abandoned; a fresh episode after the window
+ * restarts the probe from scratch. */
+#define RA_PROBE_COOLDOWN_MS 10000u
+static void ra_note_collapse( ack_peer_t *p ){
+    jiffy_t now = now_j();
+    bool same_episode = ( p->last_collapse_jiff != 0u &&
+                          (jiffy_t)(now - p->last_collapse_jiff)
+                              < ms_j(RA_PROBE_COOLDOWN_MS) );
+    uint8_t abandoned = (uint8_t)(p->tx_mcs + 1u);
+    if( !same_episode || abandoned > p->failed_top ){
+        p->failed_top = abandoned;
+    }
+    p->last_collapse_jiff = now;
+    ra_kick_inflight(p);
+}
+
+static bool ra_probe_capped( const ack_peer_t *p, uint8_t *ceil_io ){
+    if( p->failed_top == 0u || p->last_collapse_jiff == 0u ) return false;
+    if( (jiffy_t)(now_j() - p->last_collapse_jiff) >= ms_j(RA_PROBE_COOLDOWN_MS) ){
+        return false;
+    }
+    uint8_t cap = (uint8_t)(p->failed_top - 1u);
+    if( *ceil_io > cap ){
+        *ceil_io = cap;
+        g_ack_stats.ra_blk_probe++;
+    }
+    return true;
+}
+
 static void ra_on_ack( ack_peer_t *p ){
     p->last_ack_jiff = now_j();
     p->loss_q8 = (uint16_t)(((uint32_t)p->loss_q8 * (RA_EWMA_W - 1u)) >> 3);
@@ -482,11 +582,43 @@ static void ra_on_ack( ack_peer_t *p ){
     g_ack_stats.ra_ack_calls++;
     if( p->acks_since_step != 0xFFFFu ) p->acks_since_step++;
 
-    uint8_t ceil_mcs = ra_ceiling(p);
-    if( ceil_mcs > RA_MAX_MCS ) ceil_mcs = RA_MAX_MCS;
-    bool ready = ( p->tx_mcs + 1u < ceil_mcs )
-               ? ( p->loss_q8 <= g_ra_down_q8 )
-               : ( p->loss_q8 <= g_ra_up_q8 );
+    /* Loss is evaluated on EVERY ack: before this, only full slot deaths fed
+     * the down path, and under load those were masked by the vacancy gate --
+     * live 2026-08-20 a 2 MB blast saw 10 upshifts / 0 downshifts while the
+     * link retransmitted itself to 10% loss at a marginal rate. */
+    if( p->loss_q8 >= g_ra_down_q8 ){
+        uint8_t floor_d = ra_floor(p);
+        /* Same one-step-per-second governor as the climbs: the rate must
+         * never jitter in EITHER direction. */
+        if( p->tx_mcs > floor_d && now_j() >= p->next_step_allowed ){
+            p->tx_mcs--;
+            p->next_step_allowed = now_j() + g_step_gap_j;
+            g_ack_stats.ra_downshifts++;
+            ra_log_mcs("down", p);
+            ra_note_collapse(p);
+        }
+        return;
+    }
+
+    /* The ceiling is RA_MAX_MCS, nothing else. The old EVM-derived cap read
+     * the REVERSE direction's modulation quality and pinned RA at MCS2-3 on
+     * a rock-stable link (live 2026-08-20: SNR 30+ dB, loss 0%, EVM -26 ->
+     * ceiling "3" -- the user watched it never take off). EVM behaves
+     * strangely and measures what we HEAR, not what we can SAY: climbs are
+     * gated purely by live ACK evidence (the strict loss bar below), and a
+     * wrong step self-corrects via the fast down-walk + collapse memory. */
+    uint8_t ceil_mcs = RA_MAX_MCS;
+    (void)ra_probe_capped(p, &ceil_mcs);
+    /* Mid-climb steps ride the 20% bar: since the congestion window + fast
+     * bitmap ACKs killed the retransmit flood, a wrong step costs a couple
+     * of retries and self-corrects in seconds (down-walk + kick + cwnd
+     * shrink) -- while the old strict-everywhere bar kept RA pinned at
+     * MCS0-2 on an air that measured 994 kbit/s at fixed MCS4 (live
+     * 2026-08-22). Only the LAST step to the ceiling demands the strict
+     * 5% proof. */
+    bool ready = ( (uint8_t)(p->tx_mcs + 1u) >= ceil_mcs )
+               ? ( p->loss_q8 <= g_ra_up_q8 )
+               : ( p->loss_q8 <= g_ra_down_q8 );
 
     if( !ready ){
         g_ack_stats.ra_blocked_loss++;
@@ -503,6 +635,22 @@ static void ra_on_ack( ack_peer_t *p ){
     }
 }
 
+/* Retransmit timeouts are loss evidence even when no slot ever dies (the
+ * only signal the down path saw before), so each one nudges the loss EWMA a
+ * fraction of a full drop: ~10 spurious retransmits cross the 30% down
+ * threshold. Same grace period as ra_on_drop: a fresh peer must not be
+ * punished for link-setup jitter. */
+#define RA_RETRANS_STEP_Q8 8u
+static void ra_on_retrans( ack_peer_t *p ){
+    if( p->created_jiff != 0u &&
+        (jiffy_t)(now_j() - p->created_jiff) < ms_j(RA_GRACE_MS) ){
+        return;
+    }
+    uint32_t q = (uint32_t)p->loss_q8 + RA_RETRANS_STEP_Q8;
+    if( q > 255u ) q = 255u;
+    p->loss_q8 = (uint16_t)q;
+}
+
 static void ra_on_drop( ack_peer_t *p ){
     if( p->created_jiff != 0u &&
         (jiffy_t)(now_j() - p->created_jiff) < ms_j(RA_GRACE_MS) ){
@@ -515,11 +663,13 @@ static void ra_on_drop( ack_peer_t *p ){
     if( p->tx_mcs == HALOW_MCS_DEFAULT ) return;
     if( p->loss_q8 >= g_ra_down_q8 ){
         uint8_t floor_d = ra_floor(p);
-        if( p->tx_mcs > floor_d ){
+        /* One-step-per-second governor, symmetric with the climb path. */
+        if( p->tx_mcs > floor_d && now_j() >= p->next_step_allowed ){
             p->tx_mcs--;
-            p->next_step_allowed = now_j() + g_step_gap8_j;
+            p->next_step_allowed = now_j() + g_step_gap_j;
             g_ack_stats.ra_downshifts++;
             ra_log_mcs("down", p);
+            ra_note_collapse(p);
         }
     }
 }
@@ -534,6 +684,8 @@ static void ra_check_stale( ack_peer_t *p ){
     p->loss_q8           = 0;
     p->acks_since_step   = 0;
     p->next_step_allowed = now_j() + ms_j(HALOW_ACK_RA_COOLDOWN_MS);
+    p->failed_top        = 0u;
+    p->last_collapse_jiff = 0u;
     log_info("ack: peer %02x:%02x:%02x:%02x:%02x:%02x MCS stale -> ceiling %u",
              p->mac[0],p->mac[1],p->mac[2],p->mac[3],p->mac[4],p->mac[5],
              (unsigned)init_mcs);
@@ -589,7 +741,6 @@ static void config_cache( void ){
     g_quiet_j     = ms_j(1000u);
     g_busy_j      = ms_j(10000u);
     g_step_gap_j  = ms_j(HALOW_ACK_RA_STEP_GAP_MS);
-    g_step_gap8_j = ms_j(HALOW_ACK_RA_STEP_GAP_MS * 8u);
     g_dflt_ttl_j  = ms_j(5000u);
     g_ra_up_q8    = (uint16_t)((uint32_t)g_ack_cfg.ra_loss_up * 256u / 100u);
     g_ra_down_q8  = (uint16_t)((uint32_t)g_ack_cfg.ra_loss_down * 256u / 100u);
@@ -662,6 +813,7 @@ void halow_ack_config_apply( const halow_ack_config_t *cfg ){
     ack_lock();
     g_ack_cfg = c;
     g_window  = c.window;
+    if( g_cwnd > g_window ) g_cwnd = g_window;
     for( uint32_t i = 0; i < ACK_MAX_PEERS; i++ ){
         ack_peer_t *p = &g_peers[i];
         if( !p->in_use ) continue;
@@ -697,7 +849,15 @@ static void rtt_record( uint32_t born_rtt, uint32_t lasttx_rtt, uint8_t retries_
     g_ack_stats.ack_rtt_hits++;
     if( born_rtt > 10000u ) born_rtt = 10000u;
     g_ack_stats.ack_rtt_sum_ms += born_rtt;
-    if( retries_used != 0u ) return;
+    (void)retries_used;
+    /* Teach the FIRST-retransmit pace from EVERY cleared slot. Gating the
+     * EWMA on retries_used==0 was a chicken-and-egg trap: once the true RTT
+     * exceeded the initial timeout, every slot retransmitted exactly once,
+     * none of them ever counted as "clean", and the first backoff stayed
+     * too short forever -- live 40 spurious retransmits/s at SNR 25 dB with
+     * RA blinded (loss EWMA 50-90%) and pinned to MCS0 on a clean channel.
+     * lasttx_rtt (last TX -> ACK) is exactly the quantity the first-backoff
+     * floor paces, whatever the retry count was. */
     if( lasttx_rtt > 1000u ) lasttx_rtt = 1000u;
     g_ack_stats.ack_rtt_ewma_ms = (g_ack_stats.ack_rtt_ewma_ms == 0u)
         ? lasttx_rtt
@@ -722,9 +882,17 @@ static uint8_t ack_mcs_for_peer( const uint8_t dest_mac[6] ){
     ack_lock();
     ack_peer_t *p = peer_find(dest_mac);
     if( p != NULL ){
-        uint8_t c = ra_ceiling(p);
+        /* Ride the peer's PROVEN rate: p->tx_mcs is the rate the peer is
+         * successfully decoding our data at RIGHT NOW (every ACK that climbed
+         * it is direct proof of the reverse path). The old EVM-ceiling choice
+         * measured what we hear, not what survives back -- live 2026-08-20 it
+         * put ACKs on MCS5 at SNR ~12 dB, the peer stopped decoding them, and
+         * every tracked slot retransmitted itself to its life deadline. An
+         * undecodable ACK kills the delivery guarantee itself, so never send
+         * one above the proven rate. */
+        uint8_t c = p->tx_mcs;
+        if( c == HALOW_MCS_DEFAULT ) c = dflt_mcs();
         if( c > HALOW_ACK_ACK_MCS_MAX ) c = HALOW_ACK_ACK_MCS_MAX;
-        if( c < HALOW_ACK_ACK_MCS_MIN ) c = HALOW_ACK_ACK_MCS_MIN;
         ack_mcs = c;
     }
     ack_unlock();
@@ -822,7 +990,7 @@ static void peer_note_tx( ack_peer_t *p, uint32_t wire_bytes, uint16_t flen ){
     p->tx++;
     p->tx_bytes += wire_bytes;
     p->last_tx_s = (int32_t)time(NULL);
-    statistics_radio_register_tx_package(flen);
+    (void)flen;
 }
 
 /* Gates are hard HW limits only (DMA room, in-flight window); the hold/gap
@@ -831,7 +999,7 @@ static void peer_note_tx( ack_peer_t *p, uint32_t wire_bytes, uint16_t flen ){
 static bool agg_flush_locked( ack_peer_t *p ){
     if( p == NULL || p->agg_idx == 0u ) return true;
     if( halow_get_tx_vacancy() < ACK_TX_VACANCY_LOW ) return false;
-    if( g_inflight_n >= g_window ) return false;
+    if( g_inflight_n >= eff_window() ) return false;
 
     ack_buf_t *b = g_bufs[p->agg_idx - 1u];
     uint8_t  pmcs   = p->tx_mcs;
@@ -903,7 +1071,7 @@ bool halow_ack_tx_ready( void ){
     if( g_ack_cfg.max_retries == 0u ) return true;
     if( halow_get_tx_vacancy() < ACK_TX_VACANCY_LOW ) return false;
     ack_lock();
-    bool ok = ( (uint32_t)g_inflight_n + 2u <= g_window ) &&
+    bool ok = ( (uint32_t)g_inflight_n + 2u <= eff_window() ) &&
               ( (uint32_t)(ACK_BUF_N - g_used_n) >= 2u );
     ack_unlock();
     return ok;
@@ -913,7 +1081,6 @@ static int32_t tx_plain_untracked( const uint8_t *payload, uint16_t len,
                                    const uint8_t dest_mac[6], uint8_t mcs ){
     int32_t r = halow_tx(payload, len, dest_mac, mcs);
     if( r < 0 ) return HALOW_ACK_TX_THROTTLE;
-    statistics_radio_register_tx_package(len);
     return r;
 }
 
@@ -922,14 +1089,13 @@ static int32_t tx_broadcast( const uint8_t *payload, uint16_t len, const uint8_t
                    ? g_ack_cfg.bc_repeat : 1u;
     int32_t r = halow_tx(payload, len, dest_mac, HALOW_MCS_DEFAULT);
     bool first_ok = (r >= 0);
-    if( first_ok ) statistics_radio_register_tx_package(len);
+    /* stats: counted once at halow_ack_tx entry */
     for( uint8_t i = 1u; (i < copies) && (r >= 0); i++ ){
         if( halow_get_tx_vacancy() < ((uint32_t)len + 64u) ) break;
         r = halow_tx(payload, len, dest_mac, HALOW_MCS_DEFAULT);
         if( r >= 0 ){
             g_ack_stats.tx_frames++;
             g_ack_stats.bc_repeats++;
-            statistics_radio_register_tx_package(len);
         }
     }
     return first_ok ? 0 : HALOW_ACK_TX_THROTTLE;
@@ -1022,6 +1188,12 @@ static int32_t ack_tx_uc( const uint8_t *payload, uint16_t len, const uint8_t de
 
 int32_t halow_ack_tx( const uint8_t *payload, uint16_t len, const uint8_t dest_mac[6] ){
     if( payload == NULL || dest_mac == NULL ) return -1;
+    memcpy(g_ack_stats.dbg_last_dest, dest_mac, 6);
+
+    /* Radio TX stats count RETICULUM frames (one per app frame, once),
+     * symmetric with RX counting delivered frames: retransmissions and
+     * broadcast repeats are air-level plumbing, not traffic. */
+    statistics_radio_register_tx_package(len);
 
     int32_t r = ack_tx_uc(payload, len, dest_mac);
     if( r == 0 ) g_ack_stats.tx_frames++;
@@ -1041,17 +1213,22 @@ static int32_t ack_tx_uc( const uint8_t *payload, uint16_t len, const uint8_t de
     bool noack = ( g_ack_cfg.max_retries == 0u ) ||
                  is_broadcast(dest_mac) ||
                  ( (uint32_t)len > ACK_WIRE_MAX );
-    if( noack ) return tx_broadcast(payload, len, dest_mac);
+    if( noack ){
+        g_ack_stats.dbg_path_bc++;
+        return tx_broadcast(payload, len, dest_mac);
+    }
 
     ack_lock();
     ack_peer_t *p = peer_get(dest_mac);
     if( p == NULL ){
         ack_unlock();
+        g_ack_stats.dbg_path_plain++;
         return tx_plain_untracked(payload, len, dest_mac, HALOW_MCS_DEFAULT);
     }
     uint8_t pmcs = p->tx_mcs;
     if( p->cur_retries == 0u ){
         ack_unlock();
+        g_ack_stats.dbg_path_plain++;
         return tx_plain_untracked(payload, len, dest_mac, pmcs);
     }
 
@@ -1063,8 +1240,10 @@ static int32_t ack_tx_uc( const uint8_t *payload, uint16_t len, const uint8_t de
     if( ( ( g_ack_cfg.agg != 0u && (uint32_t)len <= eff_payload ) ||
           ( env_peer && (uint32_t)len <= ACK_WIRE_MAX ) ) &&
         len <= ACK_WIRE_MAX ){
+        g_ack_stats.dbg_path_bundle++;
         return tx_bundle_locked(p, payload, len, dest_mac, pmcs, eff_payload);
     }
+    g_ack_stats.dbg_path_plainl++;
     return tx_plain_locked(p, payload, len, dest_mac, pmcs);
 }
 
@@ -1099,6 +1278,7 @@ static void rx_env_ack_locked( ack_peer_t *p, const uint8_t *payload ){
             rtt_record( now_j() - b->born_jiff,
                         now_j() - b->tx_jiff,
                         b->retries_used );
+            if( b->retries_used == 0u ) cwnd_on_clean_clear();
             buf_release(b);
             g_ack_stats.acked++;
             p->acked++;
@@ -1164,6 +1344,7 @@ static void rx_ack( const uint8_t *payload, uint16_t len, const uint8_t src_mac[
             rtt_record( now_j() - b->born_jiff,
                         now_j() - b->tx_jiff,
                         b->retries_used );
+            if( b->retries_used == 0u ) cwnd_on_clean_clear();
             buf_release(b);
             g_ack_stats.acked++;
             if( p != NULL ) p->acked++;
@@ -1268,9 +1449,10 @@ static void buf_drop_deadline( ack_buf_t *b ){
     if( p != NULL ){
         p->dropped++;
         peer_note_dead_bundle(p);
-        if( halow_get_tx_vacancy() >= ACK_TX_VACANCY_LOW ){
-            ra_on_drop(p);
-        }
+        /* No vacancy gate here: a slot dying at its life deadline IS loss
+         * evidence, and under load the vacancy gate is almost always closed,
+         * which blinded RA exactly when it needed to downshift. */
+        ra_on_drop(p);
     }
 }
 
@@ -1313,11 +1495,20 @@ static void buf_retransmit_or_drop( ack_buf_t *b, jiffy_t now ){
         return;
     }
 
-    b->retries_used++;
-    b->tx_jiff = now;
-    g_ack_stats.retransmitted++;
-    p->retransmitted++;
-    buf_tx_send(b, p->tx_mcs);
+    /* A FIRST retry timeout means the in-flight queue outgrew the ACK loop:
+     * shed depth so the remaining slots' ACKs make it home in time. Later
+     * retries of the same slot are the backoff schedule working through one
+     * old queue -- they must not keep compounding the shed. */
+    {
+        uint8_t first_retry = ( b->retries_used == 0u );
+        b->retries_used++;
+        b->tx_jiff = now;
+        g_ack_stats.retransmitted++;
+        p->retransmitted++;
+        if( first_retry ) cwnd_on_retrans_timeout();
+        ra_on_retrans(p);
+        buf_tx_send(b, p->tx_mcs);
+    }
 }
 
 static void tick_service_bufs( jiffy_t now ){
@@ -1418,7 +1609,15 @@ bool halow_ack_link_busy( void ){
 }
 
 void halow_ack_init( void ){
+    /* re-init must re-read the configured MCS: a cache surviving from before
+     * (different config, or rewound time in tests) pins peers to a stale rate */
+    g_dflt_mcs_cache = 0xFFu;
     dflt_mcs_refresh();
+    /* drain leftovers from a previous init: pending frame buffers must be
+     * freed BEFORE the tables are wiped -- re-init used to leak them all */
+    for( uint32_t i = 0; i < ACK_BUF_N; i++ ){
+        if( g_bufs[i] != NULL ) buf_release(g_bufs[i]);
+    }
     halow_ack_config_load(&g_ack_cfg);
     memset(g_bufs, 0, sizeof(g_bufs));
     memset(g_peers, 0, sizeof(g_peers));
@@ -1428,6 +1627,7 @@ void halow_ack_init( void ){
     g_peers_n = 0;
     g_heap_bytes = 0;
     g_window = g_ack_cfg.window;
+    g_cwnd = ( g_window > 4u ) ? 4u : g_window;
     config_cache();
     /* fresh boot is quiet: pre-age the last-TX stamp past the busy window
      * (0 would read as "transmitted just now" for the first 10 s) */

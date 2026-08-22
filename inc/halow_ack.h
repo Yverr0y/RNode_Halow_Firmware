@@ -19,22 +19,24 @@
 #define HALOW_ACK_AGG_MAGIC1          0xADu
 #define HALOW_ACK_AGG_MAX_SUB         8u
 #define HALOW_ACK_AGG_PAYLOAD_MAX     4000u
-#define HALOW_ACK_ACK_HOLD_MS_DEF     20u   /* < timeout_ms/2 */
+#define HALOW_ACK_ACK_HOLD_MS_DEF     5u    /* fast bitmap ACKs shrink the RTT loop */
 
 #define HALOW_ACK_DEFAULT_MAX_RETRIES   3u
-#define HALOW_ACK_DEFAULT_TIMEOUT_MS    100u  /* > ACK turnaround */
+#define HALOW_ACK_DEFAULT_TIMEOUT_MS    250u  /* first retry must outwait the in-flight queue */
 #define HALOW_ACK_DEFAULT_RATE_ADAPT    1u
 #define HALOW_ACK_DEFAULT_RA_LOSS_UP    5u
-#define HALOW_ACK_DEFAULT_RA_LOSS_DOWN  30u
+#define HALOW_ACK_DEFAULT_RA_LOSS_DOWN  20u
 #define HALOW_ACK_RA_STALE_MS           60000u
 #define HALOW_ACK_RA_COOLDOWN_MS        500u
-#define HALOW_ACK_RA_STEP_GAP_MS        250u
+/* Max rate of change: at most ONE MCS step per second, in either direction
+ * -- the rate must never jitter. */
+#define HALOW_ACK_RA_STEP_GAP_MS        1000u
 
 #define HALOW_ACK_BC_REPEAT_DEF         2u
 #define HALOW_ACK_BC_REPEAT_MAX         3u
 
 #define HALOW_ACK_DEFAULT_WINDOW        10u
-#define HALOW_ACK_DEFAULT_ACK_FIDS      16u
+#define HALOW_ACK_DEFAULT_ACK_FIDS      4u
 #define HALOW_ACK_SLOTS_MAX             16u
 #define HALOW_ACK_ACK_FIDS_MAX          16u
 
@@ -101,9 +103,17 @@ typedef struct {
     uint32_t ra_blocked_loss;
     uint32_t ra_blocked_gap;
     uint32_t ra_blocked_max;
+    uint32_t ra_blk_probe;     /* climbs capped by a fresh collapse episode */
     uint32_t bc_repeats;
     uint32_t heap_fail;       /* frame-buffer malloc failures -> THROTTLE */
     uint32_t heap_bytes;      /* live frame-buffer bytes held right now */
+    /* debug: which ack_tx_uc branch fired + the last dest handed to the
+     * ack layer (hardware-tier diagnosis of the phantom-unicast bug) */
+    uint32_t dbg_path_bc;         /* tx_broadcast (incl. noack fallback) */
+    uint32_t dbg_path_plain;      /* tx_plain_untracked (no peer slot) */
+    uint32_t dbg_path_bundle;     /* tx_bundle_locked */
+    uint32_t dbg_path_plainl;     /* tx_plain_locked */
+    uint8_t  dbg_last_dest[6];
 } halow_ack_stats_t;
 
 typedef struct {
@@ -129,6 +139,8 @@ void halow_ack_config_load(halow_ack_config_t *cfg);
 void halow_ack_config_save(const halow_ack_config_t *cfg);
 void halow_ack_config_get_live(halow_ack_config_t *cfg);
 void halow_ack_config_apply(const halow_ack_config_t *cfg);
+/* Test/debug hook: pin the adaptive congestion window directly. */
+void halow_ack_cwnd_set(uint8_t v);
 
 void     halow_ack_init(void);
 bool     halow_ack_radio_quiet(void);

@@ -10,6 +10,7 @@
 #include "rns/stream_parser.h"
 #include "utils.h"
 #include "halow.h"
+#include "statistics.h"
 #include "tcp_server.h"
 
 /* Reticulum link MTU is FIXED at 500 B: on-air packets look like ordinary
@@ -45,12 +46,19 @@ static void deliver_rns_frame( const uint8_t *pkg, uint16_t len,
                                const uint8_t *src_mac, bool unicast_to_me ){
     rns_link_packet_info_t packet_info;
 
+
     int32_t res = rns_link_parser_parse(pkg, len, &packet_info);
     if( res != RNS_RET_OK ){
         g_dbg_rns_rx_parse_fail++;
         log_warn("rx rns package parse error=%d len=%u", (int)res, (unsigned int)len);
         return;
     }
+
+    /* Radio RX stats count RETICULUM frames after dedup/bundle-split,
+     * symmetric with TX counting at halow_ack_tx entry: one per DELIVERED
+     * frame (parse-failed garbage is not traffic); retransmit copies and
+     * internal ACKs never reach this point. */
+    statistics_radio_register_rx_package(len);
 
     if( packet_info.valid ){
         bool is_linkrequest = (packet_info.packet_type == RNS_PACKET_TYPE_LINKREQUEST);
