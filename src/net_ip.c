@@ -7,6 +7,7 @@
 #include "lwip/dhcp.h"
 #include "configdb.h"
 #include "lwip/tcpip.h"
+#include "net_dhcpd.h"
 #include "lib/logc/log.h"
 
 #define NET_IP_CONFIG_PREFIX              CONFIGDB_ADD_MODULE("net_ip")
@@ -243,6 +244,9 @@ int32_t net_ip_init( void ){
 
     net_ip_config_save(&net_ip_config);
     net_ip_config_apply(&net_ip_config);
+
+    /* the DHCP server (if enabled) re-evaluates against the fresh config */
+    net_dhcpd_on_netcfg();
 
     log_info("net_ip init ok");
     return 0;

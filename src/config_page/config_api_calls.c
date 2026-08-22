@@ -18,6 +18,7 @@
 
 #include "halow.h"
 #include "halow_lbt.h"
+#include "net_dhcpd.h"
 #include "halow_cca.h"
 #include "halow_ack.h"
 #include "rns/link_db.h"
@@ -450,6 +451,8 @@ int32_t web_api_net_cfg_get( const cJSON *in, cJSON *out ){
     ip4addr_ntoa_r(&cfg.mask, mask, sizeof(mask));
 
     (void)cJSON_AddBoolToObject(out, "dhcp", (cfg.mode == NET_IP_MODE_DHCP) ? 1 : 0);
+    (void)cJSON_AddBoolToObject(out, "dhcp_srv", (int)net_dhcpd_enabled_cfg());
+    (void)cJSON_AddNumberToObject(out, "dhcp_srv_running", (double)net_dhcpd_running());
     (void)cJSON_AddStringToObject(out, "ip_address", ip);
     (void)cJSON_AddStringToObject(out, "gw_address", gw);
     (void)cJSON_AddStringToObject(out, "netmask", mask);
@@ -502,6 +505,21 @@ int32_t web_api_net_cfg_post( const cJSON *in, cJSON *out ){
 
     net_ip_config_apply(&cfg);
     net_ip_config_save(&cfg);
+
+    /* DHCP server toggle: persisted separately; refuses to start in client
+     * mode (a rogue server inside somebody else's LAN poisons it). */
+    if (cJSON_GetObjectItemCaseSensitive(in, "dhcp_srv") != NULL) {
+        bool srv = false;
+
+        (void)json_get_bool(in, "dhcp_srv", &srv);
+        if (srv && cfg.mode == NET_IP_MODE_DHCP) {
+            log_warn("net_cfg_post: dhcp server refused in client mode");
+            return api_err(out, WEB_API_RC_BAD_REQUEST,
+                           "DHCP server requires static IP mode");
+        }
+        net_dhcpd_set_enabled(srv ? 1 : 0);
+    }
+    net_dhcpd_on_netcfg();
 
     log_debug("net_cfg updated dhcp=%d", dhcp ? 1 : 0);
 

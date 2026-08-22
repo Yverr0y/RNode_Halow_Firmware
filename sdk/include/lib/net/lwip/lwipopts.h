@@ -164,8 +164,9 @@ extern void hw_memcpy(void *dest, const void *src, unsigned int size);
 #endif
 // One udp_pcb is needed for each UDPSocket.
 // Each requires 84 bytes of RAM (total rounded to multiple of 512).
+// 5: netlog/dns + the DHCP-server pcb (net_dhcpd) must never exhaust the pool
 #ifndef MEMP_NUM_UDP_PCB
-#define MEMP_NUM_UDP_PCB            4
+#define MEMP_NUM_UDP_PCB            5
 #endif
 
 // Number of non-pool pbufs.

@@ -92,7 +92,8 @@
             dhcp: document.getElementById('net_dhcp').checked,
             ip_address: document.getElementById('net_ip_address').value,
             gw_address: document.getElementById('net_gw_address').value,
-            netmask: document.getElementById('net_netmask').value
+            netmask: document.getElementById('net_netmask').value,
+            dhcp_srv: document.getElementById('net_dhcp_srv').checked ? 1 : 0
         };
     }
 
@@ -239,7 +240,7 @@
         const map = [
             { group: 'halow', btn: 'save_halow', ids: ['halow_power_dbm', 'halow_central_freq', 'halow_mcs_index', 'halow_bandwidth'] },
             { group: 'lbt', btn: 'save_lbt', ids: ['cca_en', 'cca_ftpct', 'cca_dlpct', 'cca_thdyn', 'cca_sens'] },
-            { group: 'net', btn: 'save_net', ids: ['net_dhcp', 'net_ip_address', 'net_gw_address', 'net_netmask'] },
+            { group: 'net', btn: 'save_net', ids: ['net_dhcp', 'net_dhcp_srv', 'net_ip_address', 'net_gw_address', 'net_netmask'] },
             { group: 'slip', btn: 'save_slip', ids: ['slip_enable', 'slip_baud', 'slip_ip_address', 'slip_gw_address'] },
             { group: 'log', btn: 'save_log', ids: ['log_udp_enable', 'log_udp_host', 'log_udp_port'] },
             { group: 'tcp', btn: 'save_tcp', ids: ['tcp_enable', 'tcp_port', 'tcp_whitelist'] },
@@ -419,8 +420,7 @@
     }
 
     function isNetFormValid() {
-        const dhcp = document.getElementById('net_dhcp').checked;
-        if (dhcp) return true;
+        if (document.getElementById('net_dhcp').checked) return true;
         const ip = document.getElementById('net_ip_address').value.trim();
         const gw = document.getElementById('net_gw_address').value.trim();
         const nm = document.getElementById('net_netmask').value.trim();
@@ -564,7 +564,19 @@
 
         updateCcaThresholdFields();
 
-        document.getElementById('net_dhcp').addEventListener('change', () => { updateNetDisabled(); validateNetFields(); });
+        /* DHCP client and server are mutually exclusive: turning either on
+         * un-checks the other (server needs static mode, client gets its
+         * address from the network's own DHCP) */
+        const netDhcp = document.getElementById('net_dhcp');
+        const netSrv = document.getElementById('net_dhcp_srv');
+        netDhcp.addEventListener('change', () => {
+            if (netDhcp.checked) { netSrv.checked = false; }
+            updateNetDisabled(); validateNetFields();
+        });
+        netSrv.addEventListener('change', () => {
+            if (netSrv.checked) { netDhcp.checked = false; }
+            updateNetDisabled(); validateNetFields();
+        });
         document.getElementById('net_ip_address').addEventListener('input', validateNetFields);
         document.getElementById('net_gw_address').addEventListener('input', validateNetFields);
         document.getElementById('net_netmask').addEventListener('input', validateNetFields);
@@ -1439,7 +1451,8 @@
         validateLbtFields();
 
         const net = pick(state?.net, state?.api_net_cfg, state?.net_cfg);
-        setCheckbox('net_dhcp', net.dhcp);
+        setCheckbox('net_dhcp', !!net.dhcp && !net.dhcp_srv);
+        setCheckbox('net_dhcp_srv', !!net.dhcp_srv);
         setInput('net_ip_address', net.ip_address);
         setInput('net_gw_address', net.gw_address);
         setInput('net_netmask', net.netmask);
