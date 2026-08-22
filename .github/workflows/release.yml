@@ -29,7 +29,9 @@ jobs:
           python --version
 
       - name: Build (host-test gate, firmware, pack)
-        run: make COMPILER_DIR="$GITHUB_WORKSPACE/tc" -j"$(nproc)"
+        run: |
+          make prebuild
+          make COMPILER_DIR="$GITHUB_WORKSPACE/tc" -j"$(nproc)"
 
       - name: Package release tar (fw.bin + www/, plain tar)
         run: |
