@@ -1,11 +1,14 @@
 name: release
 
-# Release tag push (vX.Y.Z, no suffix) -> build firmware, package the
-# release tar, publish as a PRERELEASE with a placeholder body (filled
-# manually). Beta tags (vX.Y.Zb) are handled by beta-release.yml.
+# Manual run: Actions -> release -> Run workflow -> version like v2.2.0.
+# The tag is created automatically at the current main HEAD.
 on:
-  push:
-    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (no suffix, e.g. v2.2.0)"
+        required: true
+        default: "v2.2.0"
 
 permissions:
   contents: write
@@ -15,6 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check version format (vX.Y.Z, no suffix)
+        run: |
+          v="${{ inputs.version }}"
+          echo "$v" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must look like v2.2.0 (no trailing b), got: $v"; exit 1; }
 
       - name: C-SKY toolchain (csky-elfabiv2 V3.10.33, linux x86_64)
         run: |
@@ -35,16 +44,16 @@ jobs:
 
       - name: Package release tar (fw.bin + www/, plain tar)
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${{ inputs.version }}"
           NAME="RNode-Halow-${TAG//./_}"
           tar -cf "${NAME}.tar" -C out fw.bin -C "$PWD/out/_filesystem" www
           tar -tvf "${NAME}.tar"
           sha256sum "${NAME}.tar" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "ASSET=${NAME}.tar" >> "$GITHUB_ENV"
 
-      - name: Publish prerelease (placeholder body)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${GITHUB_REF_NAME}" "$ASSET" \
-            --prerelease --title "" --notes "PLACEHOLDER"
+      - name: Publish prerelease (tag auto-created, placeholder body)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          prerelease: true
+          body: PLACEHOLDER
+          files: RNode-Halow-*.tar
