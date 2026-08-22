@@ -13,6 +13,10 @@ extern __bobj uint64 cpu_loading_tick;
 
 volatile statistics_radio_t g_stat_radio;
 
+static uint32_t s_rx_bytes_previous;
+static uint32_t s_tx_bytes_previous;
+static uint8_t  s_rx_idle_s, s_tx_idle_s;
+
 static struct os_task g_stat_task;
 
 void statistics_radio_register_rx_package( uint32_t len ) {
@@ -36,6 +40,10 @@ void statistics_radio_reset( void ) {
     g_stat_radio.tx_packets = 0;
     g_stat_radio.rx_bitps = 0;
     g_stat_radio.tx_bitps = 0;
+    s_rx_bytes_previous = 0;
+    s_tx_bytes_previous = 0;
+    s_rx_idle_s = 0;
+    s_tx_idle_s = 0;
 }
 
 void statistics_cpu_load_get( char *return_str, uint32_t max_len ) {
@@ -159,33 +167,32 @@ void statistics_uptime_get( char *return_str, uint32_t max_len ) {
     strncpy(return_str, tmp_str, max_len);
 }
 
-static void statistics_task( void *arg ) {
-    static uint32_t rx_bytes_previous;
-    static uint32_t tx_bytes_previous;
-    static uint8_t  rx_idle_s, tx_idle_s;
+/* Per-second rate update, extracted from the task loop so tests can drive
+ * it deterministically. IIR: y = (3y + x)/4 over the last second's byte
+ * delta; decays progressively in silence; 10 idle seconds clamp to zero. */
+void statistics_radio_rate_tick( void ) {
+    uint32_t rx_bytes_now = g_stat_radio.rx_bytes;
+    uint32_t tx_bytes_now = g_stat_radio.tx_bytes;
 
+    uint32_t rx_delta = (rx_bytes_now >= s_rx_bytes_previous) ? (rx_bytes_now - s_rx_bytes_previous) : 0;
+    uint32_t tx_delta = (tx_bytes_now >= s_tx_bytes_previous) ? (tx_bytes_now - s_tx_bytes_previous) : 0;
+
+    g_stat_radio.rx_bitps = (g_stat_radio.rx_bitps * 3u + rx_delta * 8u) / 4u;
+    g_stat_radio.tx_bitps = (g_stat_radio.tx_bitps * 3u + tx_delta * 8u) / 4u;
+    if( rx_delta != 0u ) s_rx_idle_s = 0u;
+    else if( ++s_rx_idle_s >= 10u ) g_stat_radio.rx_bitps = 0u;
+    if( tx_delta != 0u ) s_tx_idle_s = 0u;
+    else if( ++s_tx_idle_s >= 10u ) g_stat_radio.tx_bitps = 0u;
+
+    s_rx_bytes_previous = rx_bytes_now;
+    s_tx_bytes_previous = tx_bytes_now;
+}
+
+static void statistics_task( void *arg ) {
     (void)arg;
 
     while(1) {
-        uint32_t rx_bytes_now = g_stat_radio.rx_bytes;
-        uint32_t tx_bytes_now = g_stat_radio.tx_bytes;
-
-        uint32_t rx_delta = (rx_bytes_now >= rx_bytes_previous) ? (rx_bytes_now - rx_bytes_previous) : 0;
-        uint32_t tx_delta = (tx_bytes_now >= tx_bytes_previous) ? (tx_bytes_now - tx_bytes_previous) : 0;
-
-        /* IIR runs every second, traffic or not: y = (3y + x)/4. The output
-         * decays progressively in silence instead of freezing; 10 idle
-         * seconds clamp the tail to zero. */
-        g_stat_radio.rx_bitps = (g_stat_radio.rx_bitps * 3u + rx_delta * 8u) / 4u;
-        g_stat_radio.tx_bitps = (g_stat_radio.tx_bitps * 3u + tx_delta * 8u) / 4u;
-        if( rx_delta != 0u ) rx_idle_s = 0u;
-        else if( ++rx_idle_s >= 10u ) g_stat_radio.rx_bitps = 0u;
-        if( tx_delta != 0u ) tx_idle_s = 0u;
-        else if( ++tx_idle_s >= 10u ) g_stat_radio.tx_bitps = 0u;
-        (void)rx_idle_s; (void)tx_idle_s;
-
-        rx_bytes_previous = rx_bytes_now;
-        tx_bytes_previous = tx_bytes_now;
+        statistics_radio_rate_tick();
 
         /* ACK-tick stall canary: the tick feeds the hardware watchdog, so a
          * frozen tick resets the node silently. This task is independent of
