@@ -33,14 +33,15 @@ void t_init_defaults( void ){
 
     halow_ack_config_get_live(&live);
     CHECK( live.max_retries == 3 );
-    CHECK( live.timeout_ms == 100 );
+    CHECK( live.timeout_ms == 250 );
     CHECK( live.window == 10 );
-    CHECK( live.ack_fids == 16 );
+    CHECK( live.ack_fids == 4 );
+    CHECK( live.ack_hold_ms == 5 );
     CHECK( live.agg == 1 );
     CHECK( live.env == 1 );
     CHECK( live.agg_bytes == 4000 );
 
-    CHECK( test_kv_get("cfg.hack.ver", &v) == 0 && v == 4 );
+    CHECK( test_kv_get("cfg.hack.ver", &v) == 0 && v == 5 );   /* ACK_CFG_VER */
     CHECK( test_kv_get("cfg.hack.retry", &v) == 0 && v == 3 );
     CHECK( test_task_inits() == 1 );
 }
@@ -69,7 +70,7 @@ void t_config_clamp( void ){
     CHECK( live.ack_hold_ms == 100 );
     CHECK( live.bc_repeat == 3 );
     CHECK( live.agg_bytes == 4000 );
-    CHECK( live.ra_loss_up == 5 && live.ra_loss_down == 30 );
+    CHECK( live.ra_loss_up == 5 && live.ra_loss_down == 20 );
 
     cfg.agg_bytes = 0;
     halow_ack_config_apply(&cfg);
@@ -444,6 +445,7 @@ void t_window_gate( void ){
 
     cfg.window = 6;
     halow_ack_config_apply(&cfg);
+    halow_ack_cwnd_set(6);   /* the governor would re-grow on its own */
     run_ticks(3, 5);
     CHECK( test_tx_count() == 3 );
     CHECK( halow_ack_tx_ready() );
@@ -480,6 +482,7 @@ void t_ra_upshift( void ){
 
     cfg_base(&cfg);
     cfg.rate_adapt = 1;
+    test_set_dflt_mcs(4);   /* ladder baseline: configured MCS = 4 */
     node_start(&cfg);
 
     fill_payload(data, sizeof(data), 1);
@@ -493,12 +496,12 @@ void t_ra_upshift( void ){
     CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 5 );
 
     for( int i = 0; i < 3; i++ ){
-        test_advance_ms(300);
+        test_advance_ms(1100);
         rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
     }
     CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
 
-    test_advance_ms(300);
+    test_advance_ms(1100);
     rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
     CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
 
@@ -535,12 +538,16 @@ void t_agg_size_per_mcs( void ){
     cfg.rate_adapt = 1;
     cfg.max_retries = 1;
     cfg.timeout_ms = 5;
+    /* configured MCS = 1: the LO peer sits there (EVM -30 caps its ceiling
+     * at 1, and the configured rate is the floor), the HI peer climbs off it
+     * on clean ACKs -- this exercises per-MCS bundle sizing at both ends */
+    test_set_dflt_mcs(1);
     node_start(&cfg);
 
     fill_payload(data, sizeof(data), 1);
     CHECK( rx_frame(PEER_HI, data, sizeof(data), 0) );
-    for( int i = 0; i < 5; i++ ){
-        test_advance_ms(300);
+    for( int i = 0; i < 6; i++ ){
+        test_advance_ms(1100);
         rx_ack_frame(PEER_HI, ack, build_legacy_ack(ack, EVM_M10, 0));
     }
     CHECK( halow_ack_peer_stats_by_mac(PEER_HI, &ps) && ps.tx_mcs == 7 );
@@ -684,6 +691,7 @@ void t_pool_exhaustion( void ){
     cfg.agg = 0;
     cfg.window = 8;
     node_start(&cfg);
+    halow_ack_cwnd_set(8);   /* this test exercises the pool, not the governor */
 
     for( uint8_t id = 1; id <= 8; id++ ){
         peer_mac(m, id);
@@ -739,6 +747,7 @@ void t_window_runtime_change( void ){
 
     cfg.window = 8;
     halow_ack_config_apply(&cfg);
+    halow_ack_cwnd_set(8);
     run_ticks(3, 5);
     CHECK( test_tx_count() == 5 );
 
@@ -814,11 +823,11 @@ void t_config_migration_reseed( void ){
 
     halow_ack_config_get_live(&live);
     CHECK( live.max_retries == 3 );
-    CHECK( live.timeout_ms == 100 );
+    CHECK( live.timeout_ms == 250 );
     CHECK( live.window == 10 );
-    CHECK( live.ack_fids == 16 );
+    CHECK( live.ack_fids == 4 );
 
-    CHECK( test_kv_get("cfg.hack.ver", &v) == 0 && v == 4 );
+    CHECK( test_kv_get("cfg.hack.ver", &v) == 0 && v == 5 );   /* ACK_CFG_VER */
     CHECK( test_kv_get("cfg.hack.retry", &v) == 0 && v == 3 );
 }
 
@@ -861,3 +870,334 @@ void t_env_peer_agg_off_still_acked( void ){
 
 /* ============ coverage: decoder hold paths, type-2 LR, link states ============ */
 
+/* Live-found regression (2026-08-21): RA started fresh peers at a hardcoded
+ * MCS4 and stale-reset them at an EVM-derived ceiling, re-arming a rate the
+ * peer could not decode while wiping the loss history -- permanent silent
+ * unicast black hole. Contract: with RA on, peers START and STALE-RESET at
+ * the CONFIGURED MCS; only live ACKs may climb from there. */
+void t_ra_pin_to_config( void ){
+    halow_ack_config_t cfg;
+    halow_ack_peer_stats_t ps;
+    uint8_t ack[5];
+    uint8_t data[16];
+
+    cfg_base(&cfg);
+    cfg.rate_adapt = 1;
+    test_set_dflt_mcs(2);
+    node_start(&cfg);
+
+    fill_payload(data, sizeof(data), 1);
+    CHECK( rx_frame(PEER_R, data, sizeof(data), EVM_M10) );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 2 );
+
+    /* live ACKs climb one step per gap: 2 -> 3 -> 4 */
+    test_advance_ms(1100);
+    rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 3 );
+    test_advance_ms(1100);
+    rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 4 );
+
+    /* go silent past the stale window, then get re-heard: the peer must land
+     * back on the CONFIGURED rate (2), never on the EVM ceiling (7) */
+    test_advance_ms(61000);
+    fill_payload(data, sizeof(data), 2);
+    CHECK( rx_frame(PEER_R, data, sizeof(data), EVM_M10) );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) );
+    CHECK( ps.tx_mcs == 2 );
+}
+
+/* Live-found (2026-08-20, degraded-RSSI bench): under load the only loss
+ * evidence RA saw was a full slot death, and the vacancy gate masked even
+ * that -- a 2 MB blast logged 10 upshifts / 0 downshifts while the link sat
+ * at a marginal rate retransmitting ~10% of frames. Contract: retransmit
+ * timeouts feed the loss EWMA, and every ACK re-evaluates the down
+ * threshold, so RA walks OFF a rate that stopped paying for itself. */
+void t_ra_retrans_down( void ){
+    halow_ack_config_t cfg;
+    halow_ack_stats_t st;
+    halow_ack_peer_stats_t ps;
+    uint8_t data[16];
+    uint8_t ack[5];
+
+    cfg_base(&cfg);
+    cfg.rate_adapt  = 1;
+    cfg.timeout_ms  = 100;
+    cfg.max_retries = 8;
+    test_set_dflt_mcs(4);
+    node_start(&cfg);
+
+    fill_payload(data, sizeof(data), 1);
+    CHECK( rx_frame(PEER_R, data, sizeof(data), EVM_M10) );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 4 );
+
+    /* climb to the top on clean ACKs, exactly like t_ra_upshift */
+    for( int i = 0; i < 3; i++ ){
+        test_advance_ms(1100);
+        rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    }
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
+
+    /* retransmit storm #1: one slot's life (5250 ms) fits 6 timeouts at
+     * 850 ms ticks; each bumps loss by 8 -> 48. Still under the down
+     * threshold: an ACK decays it to 42 and must NOT change the rate. */
+    test_advance_ms(2100);   /* leave the RA grace period */
+    CHECK( halow_ack_tx(data, sizeof(data), PEER_R) == 0 );
+    halow_ack_flush();
+    for( int i = 0; i < 6; i++ ){
+        test_advance_ms(850);
+        halow_ack_tick();
+    }
+    halow_ack_stats_get(&st);
+    CHECK( st.retransmitted == 6 );
+    CHECK( st.drop_deadline == 0 );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.loss_q8 == 48 );
+
+    /* resolve frame #1 by its REAL fid so it cannot keep retransmitting in
+     * the background of storm #2; this ACK also decays the loss (48 -> 42)
+     * and must NOT change the rate below the down threshold */
+    rx_ack_frame(PEER_R, ack,
+                 build_legacy_ack(ack, EVM_M10, fid_of(data, sizeof(data))));
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.loss_q8 == 42 );
+
+    /* storm #2 crosses the threshold (42 + 6*8 = 90); the next ACK decays it
+     * to 78, past the down bar (20%), and walks the rate DOWN -- without
+     * needing a slot death */
+    CHECK( halow_ack_tx(data, sizeof(data), PEER_R) == 0 );
+    halow_ack_flush();
+    for( int i = 0; i < 6; i++ ){
+        test_advance_ms(850);
+        halow_ack_tick();
+    }
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.loss_q8 == 90 );
+    rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    halow_ack_stats_get(&st);
+    CHECK( st.ra_downshifts == 1 );
+    CHECK( st.retransmitted == 12 );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 6 );
+}
+
+/* The vacancy gate used to hide deadline deaths from RA whenever the link
+ * was saturated -- exactly when downshifting matters. Contract: a slot dying
+ * at its life deadline feeds RA even with the DMA budget pinned at zero. */
+void t_ra_deadline_feeds_ra( void ){
+    halow_ack_config_t cfg;
+    halow_ack_stats_t st;
+    halow_ack_peer_stats_t ps;
+    uint8_t data[16];
+
+    cfg_base(&cfg);
+    cfg.rate_adapt  = 1;
+    cfg.timeout_ms  = 100;
+    cfg.max_retries = 8;
+    test_set_dflt_mcs(4);
+    node_start(&cfg);
+
+    fill_payload(data, sizeof(data), 2);
+    CHECK( rx_frame(PEER_R, data, sizeof(data), EVM_M10) );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 4 );
+
+    test_advance_ms(2100);   /* leave the RA grace period */
+    /* slot goes in-flight while the budget is still there... */
+    CHECK( halow_ack_tx(data, sizeof(data), PEER_R) == 0 );
+    halow_ack_flush();
+    /* ...then the link saturates before any ACK comes back */
+    test_vacancy_set(0);
+    test_advance_ms(6000);   /* past ACK_SLOT_LIFE_MAX_MS */
+    halow_ack_tick();
+
+    halow_ack_stats_get(&st);
+    CHECK( st.drop_deadline == 1 );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) );
+    CHECK( ps.loss_q8 == 32 );      /* ra_on_drop ran despite vacancy == 0 */
+    CHECK( st.ra_downshifts == 0 ); /* 32 < threshold: recorded, not walked */
+}
+
+/* The EVM-derived floor used to forbid the escape: on an asymmetric link it
+ * demanded "never below MCS5" while the forward path could not even carry
+ * MCS1 (live: stuck with 60-90% retransmit loss). Contract: the down-walk
+ * may always reach the CONFIGURED MCS -- the only rate with unconditional
+ * proof of life, broadcasts ride it -- and stops there. */
+void t_ra_floor_is_configured( void ){
+    halow_ack_config_t cfg;
+    halow_ack_stats_t st;
+    halow_ack_peer_stats_t ps;
+    uint8_t data[16];
+    uint8_t ack[5];
+
+    cfg_base(&cfg);
+    cfg.rate_adapt  = 1;
+    cfg.timeout_ms  = 100;
+    cfg.max_retries = 8;
+    test_set_dflt_mcs(4);
+    node_start(&cfg);
+
+    fill_payload(data, sizeof(data), 9);
+    CHECK( rx_frame(PEER_R, data, sizeof(data), EVM_M10) );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 4 );
+
+    /* climb to the top while the link is clean */
+    for( int i = 0; i < 3; i++ ){
+        test_advance_ms(1100);
+        rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    }
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
+
+    /* storm cycles: one frame per cycle, resolved by its real fid so the
+     * next cycle starts clean. Each cycle adds 48 loss; the fid-ack decays
+     * by 1/8 and re-evaluates the down threshold (76).
+     * expected: 42(no down), 78->6, 110->5, 138->4, then pinned at 4. */
+    test_advance_ms(2100);
+    const int expect_mcs[5] = {7, 6, 5, 4, 4};
+    for( int c = 0; c < 5; c++ ){
+        fill_payload(data, sizeof(data), (uint8_t)(10 + c));
+        CHECK( halow_ack_tx(data, sizeof(data), PEER_R) == 0 );
+        halow_ack_flush();
+        for( int i = 0; i < 6; i++ ){
+            test_advance_ms(850);
+            halow_ack_tick();
+        }
+        rx_ack_frame(PEER_R, ack,
+                     build_legacy_ack(ack, EVM_M10, fid_of(data, sizeof(data))));
+        CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) );
+        CHECK( ps.tx_mcs == expect_mcs[c] );
+    }
+    halow_ack_stats_get(&st);
+    CHECK( st.ra_downshifts == 3 );
+    CHECK( st.drop_deadline == 0 );
+}
+
+/* A rate that just collapsed must not be re-entered while the episode is
+ * fresh: climbing straight back into it turns one probe into a loop of
+ * collapses (the live AUTO-vs-MCS3 gap). Contract: after a downshift from
+ * X, clean ACKs cap at X-1 for the cooldown window; past the window the
+ * probe may try X again. The downshift also KICKS every inflight slot of
+ * that peer so they resend immediately at the lower rate instead of
+ * waiting out backoffs tuned for the failed one. */
+void t_ra_probe_cap_and_kick( void ){
+    halow_ack_config_t cfg;
+    halow_ack_stats_t st;
+    halow_ack_peer_stats_t ps;
+    uint8_t data[16];
+    uint8_t ack[5];
+
+    cfg_base(&cfg);
+    cfg.rate_adapt  = 1;
+    cfg.timeout_ms  = 100;
+    cfg.max_retries = 8;
+    test_set_dflt_mcs(4);
+    node_start(&cfg);
+
+    fill_payload(data, sizeof(data), 3);
+    CHECK( rx_frame(PEER_R, data, sizeof(data), EVM_M10) );
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 4 );
+
+    for( int i = 0; i < 3; i++ ){
+        test_advance_ms(1100);
+        rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    }
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
+
+    /* collapse from MCS7 (two storm cycles as in t_ra_retrans_down) */
+    test_advance_ms(2100);
+    CHECK( halow_ack_tx(data, sizeof(data), PEER_R) == 0 );
+    halow_ack_flush();
+    for( int i = 0; i < 6; i++ ){
+        test_advance_ms(850);
+        halow_ack_tick();
+    }
+    rx_ack_frame(PEER_R, ack,
+                 build_legacy_ack(ack, EVM_M10, fid_of(data, sizeof(data))));
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
+    fill_payload(data, sizeof(data), 4);
+    CHECK( halow_ack_tx(data, sizeof(data), PEER_R) == 0 );
+    halow_ack_flush();
+    for( int i = 0; i < 6; i++ ){
+        test_advance_ms(850);
+        halow_ack_tick();
+    }
+    rx_ack_frame(PEER_R, ack,
+                 build_legacy_ack(ack, EVM_M10, fid_of(data, sizeof(data))));
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 6 );
+
+    /* fresh-ACK climb is now capped below the failed rate (7). Decay the
+     * loss with acks INSIDE the 1 s governor window first: the rate must
+     * not move in either direction while it is pacing. */
+    halow_ack_stats_get(&st);
+    uint32_t probe_blocks0 = st.ra_blk_probe;
+    for( int i = 0; i < 4; i++ ){
+        test_advance_ms(300);
+        rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    }
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 6 );
+    /* keep acking clean: loss decays under the strict bar, the governor
+     * allows a climb, but the collapse episode caps it at the failed-1 */
+    for( int i = 0; i < 12; i++ ){
+        test_advance_ms(300);
+        rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+    }
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 6 );
+    halow_ack_stats_get(&st);
+    CHECK( st.ra_blk_probe > probe_blocks0 );
+
+    /* past the cooldown window AND once the loss EWMA decays below the
+     * strict bar, the probe may try the failed rate again */
+    test_advance_ms(9200);   /* collapse cooldown (10 s) is over */
+    for( int i = 0; i < 14; i++ ){
+        rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
+        test_advance_ms(50);
+    }
+    CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 7 );
+}
+
+/* Live-found (2026-08-20): a retransmitted OLD bundle seq wrapped the
+ * forward-distance math in the receiver's seq window, which treated it as a
+ * far jump and RESET the window -- un-acking every newer bundle. The next
+ * bitmap ACK then covered almost nothing, the sender re-sent delivered
+ * data, and each re-arrival poisoned the window again: 223 deadline drops
+ * with ~50% phantom loss on a clean channel. Contract: an old seq inside
+ * the window is an already-marked duplicate and must be ignored. */
+static void rx_env_bundle_seq( const uint8_t *mac, uint16_t seq ){
+    uint8_t b[6 + 2 + 32];
+    b[0] = 0xA5; b[1] = 0x5A;
+    b[2] = (uint8_t)((HALOW_ENV_VER << 4) | HALOW_ENV_TYPE_BUNDLE);
+    b[3] = (uint8_t)(seq & 0xFF);
+    b[4] = (uint8_t)(seq >> 8);
+    b[5] = 1;                      /* nsub */
+    b[6] = 32; b[7] = 0;           /* sub len */
+    fill_payload(b + 8, 32, (uint8_t)seq);
+    const uint8_t *out = NULL;
+    uint16_t out_len = 0;
+    (void)halow_ack_on_rx(b, sizeof(b), mac, MAC_ME, EVM_M10, &out, &out_len);
+}
+
+static bool ack_bitmap_has( const test_tx_cap_t *t, uint16_t seq ){
+    if( t->len != 14 || t->buf[0] != 0xA5 || t->buf[1] != 0x5A ) return false;
+    uint16_t base = (uint16_t)((uint16_t)t->buf[4] | ((uint16_t)t->buf[5] << 8));
+    uint16_t diff = (uint16_t)(seq - base);
+    if( diff >= 64u ) return false;
+    return (t->buf[6 + diff / 8] >> (diff % 8)) & 1u;
+}
+
+void t_rxseq_retrans_no_poison( void ){
+    halow_ack_config_t cfg;
+
+    cfg_base(&cfg);
+    node_start(&cfg);
+    env_peer_ready(PEER_D);
+
+    rx_env_bundle_seq(PEER_D, 100);
+    rx_env_bundle_seq(PEER_D, 101);
+    rx_env_bundle_seq(PEER_D, 102);
+    const test_tx_cap_t *t = test_tx_last();
+    CHECK( ack_bitmap_has(t, 100) && ack_bitmap_has(t, 101) &&
+           ack_bitmap_has(t, 102) );
+
+    /* the retransmitted OLD bundle must not un-ack 101/102 */
+    rx_env_bundle_seq(PEER_D, 100);
+    rx_env_bundle_seq(PEER_D, 103);
+    t = test_tx_last();
+    CHECK( ack_bitmap_has(t, 100) && ack_bitmap_has(t, 101) &&
+           ack_bitmap_has(t, 102) && ack_bitmap_has(t, 103) );
+}

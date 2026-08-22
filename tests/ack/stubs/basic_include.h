@@ -42,4 +42,30 @@ void     os_sleep(int sec);
 void     *os_malloc(uint32_t size);
 void     os_free(void *p);
 
+
+/* Preempt the real osal headers with a minimal, platform-free set.
+ * Defining their include guards here makes any later real include a no-op,
+ * so every TU in the test build sees ONE consistent declaration set. */
+#define _OS_TASK_H_
+#define __OS_TIME_H_
+#define __OS_SLEEP_H_
+#define _SYS_HEAP_H_
+
+#define __bobj
+#define os_snprintf snprintf
+#define DIFF_JIFFIES(j1,j2) ((j2)-(j1))
+
+#include <time.h>
+
+struct os_task_info { uint32_t time; };
+struct sys_heap { int dummy; };
+struct timespec;               /* provided by <time.h> above */
+struct timeval;
+struct timezone;
+
+int32_t os_task_runtime(struct os_task_info *t, int32_t count);
+void    os_systime(struct timespec *tm);
+uint32_t sysheap_totalsize(struct sys_heap *heap);
+uint32_t sysheap_freesize(struct sys_heap *heap);
+extern struct sys_heap sram_heap;
 #endif

@@ -15,6 +15,7 @@ typedef struct {
 } test_tx_cap_t;
 
 void test_time_reset(void);
+void test_set_dflt_mcs(uint8_t mcs);
 void test_advance_ms(uint32_t ms);
 
 void test_vacancy_set(uint32_t v);

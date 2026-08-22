@@ -3,6 +3,9 @@
  * Suite implementations live in suite/*.c, one file per module under test. */
 #include "test_fw.h"
 #include "tests.h"
+#include "harness.h"
+#include "rns/stream_parser.h"
+#include "helpers.h"
 
 #include <stdio.h>
 
@@ -28,6 +31,12 @@ int main( void ){
         {"window_gate",                 t_window_gate},
         {"tx_ready_gating",             t_tx_ready_gating},
         {"ra_upshift",                  t_ra_upshift},
+        {"ra_pin_to_config",            t_ra_pin_to_config},
+        {"ra_retrans_down",             t_ra_retrans_down},
+        {"ra_deadline_feeds_ra",        t_ra_deadline_feeds_ra},
+        {"ra_floor_is_configured",      t_ra_floor_is_configured},
+        {"ra_probe_cap_and_kick",       t_ra_probe_cap_and_kick},
+        {"rxseq_retrans_no_poison",     t_rxseq_retrans_no_poison},
         {"is_internal_frame",           t_is_internal_frame},
         {"agg_size_per_mcs",            t_agg_size_per_mcs},
         {"ack_evm_zero_encoding",       t_ack_evm_zero_encoding},
@@ -88,18 +97,56 @@ int main( void ){
         {"cov_linkdb_fill_close_hijack", t_cov_linkdb_fill_close_hijack},
         {"cov_legacy_bundle_deliver",    t_cov_legacy_bundle_deliver},
         {"env_peer_agg_off_still_acked", t_env_peer_agg_off_still_acked},
+        {"stats_counters_exact",        t_stats_counters_exact},
+        {"stats_rate_iir_decay",        t_stats_rate_iir_decay},
+        {"stats_rate_idle_clamp_zero",  t_stats_rate_idle_clamp_zero},
+        {"stats_rate_wrap_guard",       t_stats_rate_wrap_guard},
+        {"stats_bc_repeat_air_count",   t_stats_bc_repeat_air_counting},
+        {"stats_bc_vacancy_break",      t_stats_bc_repeat_vacancy_break},
+        {"stats_rx_air_pre_dedup",      t_stats_rx_air_pre_dedup},
+        {"stats_dest_bc_vs_unicast",    t_stats_dest_broadcast_vs_unicast},
+        {"stats_roundtrip_symmetry",     t_stats_roundtrip_symmetry},
+        {"chload_silent",               t_chload_silent},
+        {"chload_tx_duty",              t_chload_tx_duty},
+        {"chload_rx_mcs",               t_chload_rx_mcs},
+        {"chload_max",                  t_chload_max},
+        {"chload_avg",                  t_chload_avg},
+        {"chload_sat_reset",            t_chload_sat_reset},
+        {"dhcpd_happy_path",            t_dhcpd_happy_path},
+        {"dhcpd_pool_exhaust",          t_dhcpd_pool_exhaust},
+        {"dhcpd_nak_rules",             t_dhcpd_nak_rules},
+        {"dhcpd_malformed",             t_dhcpd_malformed},
+        {"dhcpd_build",                 t_dhcpd_build},
         };
 
     printf("halow_ack host tests: %d scenarios\n", (int)(sizeof(tests) / sizeof(tests[0])));
     for( unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); i++ ){
         int pass_before = test_pass_count();
         int fail_before = test_fail_count();
+        /* pending window state legitimately carries between scenarios and is
+         * reclaimed by the next init's drain -- report it, do not fail here */
+        uint32_t heap_b0 = test_malloc_live_blocks();
+        uint32_t heap_y0 = test_malloc_live_bytes();
         printf("  %-30s", tests[i].name);
         tests[i].fn();
+        if( test_malloc_live_blocks() != heap_b0 || test_malloc_live_bytes() != heap_y0 ){
+            printf(" [held blocks%s%d bytes%s%d]",
+                   test_malloc_live_blocks() > heap_b0 ? "+" : "",
+                   (int)test_malloc_live_blocks() - (int)heap_b0,
+                   test_malloc_live_bytes() > heap_y0 ? "+" : "",
+                   (int)test_malloc_live_bytes() - (int)heap_y0);
+        }
         if( test_pass_count() == pass_before && test_fail_count() == fail_before ) printf(" [no checks]\n");
         else if( test_fail_count() == fail_before )                                 printf(" ok\n");
         else                                                                        printf(" FAIL\n");
     }
+
+    /* suite-level heap law: after a canonical drain, NOTHING may remain --
+     * anything still alive here is a real leak (double-owned buffer,
+     * forgotten chunk) that no init path reclaims */
+    node_start(NULL);
+    test_check( test_malloc_live_blocks() == 0 && test_malloc_live_bytes() == 0,
+                "suite final drain leaves the heap empty", "registry", -1, "e2e");
     printf("\n%d checks passed, %d failed\n", test_pass_count(), test_fail_count());
     return test_fail_count() ? 1 : 0;
 }

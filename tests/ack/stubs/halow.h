@@ -30,3 +30,6 @@ uint32_t halow_get_mtu(uint8_t mcs);
 uint8_t  halow_cfg_mcs_get_cached(void);
 
 #endif
+
+void halow_cfg_mcs_bw_refresh(void);
+void halow_gain_pilot_tick(void);

@@ -60,7 +60,7 @@ void t_cov_ack_misc( void ){
     CHECK( halow_ack_on_rx((const uint8_t *)"x", 1, PEER_A, MAC_ME, 0, &o, NULL) );
 
     /* config_load happy path: version matches -> keys are read back */
-    test_kv_set("cfg.hack.ver", 4);
+    test_kv_set("cfg.hack.ver", 5);   /* ACK_CFG_VER */
     test_kv_set("cfg.hack.tmo", 33);
     test_kv_set("cfg.hack.aggbytes", 1000);
     test_kv_set("cfg.hack.ra", 0);
@@ -102,24 +102,26 @@ void t_cov_ra_walk_and_stale( void ){
 
     cfg_base(&cfg);
     cfg.rate_adapt = 1;
+    test_set_dflt_mcs(4);   /* ladder baseline: configured MCS = 4 */
     node_start(&cfg);
 
     fill_payload(data, sizeof(data), 1);
     CHECK( rx_frame(PEER_R, data, sizeof(data), EVM_M10) );
     CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == 4 );
 
-    /* walk MCS 4 -> 5 -> 6 -> 7 one step per gap */
+    /* walk MCS 4 -> 5 -> 6 -> 7 one step per 1 s gap (max rate of change) */
     for( int m = 5; m <= 7; m++ ){
-        test_advance_ms(300);
+        test_advance_ms(1100);
         rx_ack_frame(PEER_R, ack, build_legacy_ack(ack, EVM_M10, 0));
         CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) && ps.tx_mcs == (uint8_t)m );
     }
 
-    /* stale peer (no ACK for > RA_STALE) resets to the EVM ceiling on tick */
+    /* stale peer (no ACK for > RA_STALE) resets to the CONFIGURED rate on
+     * tick -- never to an EVM ceiling computed from stale samples */
     test_advance_ms(61000);
     halow_ack_tick();
     CHECK( halow_ack_peer_stats_by_mac(PEER_R, &ps) );
-    CHECK( ps.tx_mcs == 7 );
+    CHECK( ps.tx_mcs == 4 );
     halow_ack_stats_get(&st);
     CHECK( st.outstanding == 0 );
 }
@@ -134,6 +136,7 @@ void t_cov_slot_exhaust_untracked( void ){
     cfg.agg = 0;
     cfg.window = 16;
     node_start(&cfg);
+    halow_ack_cwnd_set(cfg.window);  /* exercises the pool, not the governor */
 
     /* 16 peers, one in-flight frame each */
     for( uint8_t id = 1; id <= 16; id++ ){

@@ -4,6 +4,9 @@
 #include "statistics.h"
 #include "configdb.h"
 #include "harness.h"
+#include "statistics.h"
+
+#include <stdarg.h>
 
 #include <stdarg.h>
 
@@ -26,6 +29,7 @@ uint32_t os_jiffies_to_msecs(uint64_t j){ return (uint32_t)j; }
 
 void test_time_reset(void){ g_jiff = 1000; }
 void test_advance_ms(uint32_t ms){ g_jiff += ms; }
+void test_set_dflt_mcs(uint8_t mcs){ g_dflt_mcs = mcs; }
 
 int32_t os_sema_down(struct os_semaphore *s, int32_t tmo_ms){
     (void)tmo_ms;
@@ -197,8 +201,20 @@ int32_t tcp_server_send_owned(uint8_t *os_buf, uint32_t len){
     return r;
 }
 
-static uint32_t g_stat_tx_pkgs;
-void statistics_radio_register_tx_package(uint16_t len){ (void)len; g_stat_tx_pkgs++; }
+/* real src/statistics.c is linked into the test binaries; these are the
+ * platform pieces its task code references (never called in scenarios) */
+uint64_t cpu_loading_tick;
+struct sys_heap sram_heap;   /* struct sys_heap comes from the stub basic_include */
+uint32_t sysheap_totalsize(struct sys_heap *heap){ (void)heap; return 128u * 1024u; }
+uint32_t sysheap_freesize(struct sys_heap *heap){ (void)heap; return 64u * 1024u; }
+int32_t os_task_runtime(struct os_task_info *t, int32_t count){ (void)t; (void)count; return 0; }
+void os_systime(struct timespec *tm){ memset(tm, 0, sizeof(*tm)); }
+int8_t halow_lbt_background_short_dbm_get(void){ return -100; }
+int8_t halow_lbt_background_long_dbm_get(void){ return -100; }
+float halow_lbt_airtime_get(void){ return 0.0f; }
+float halow_lbt_ch_util_get(void){ return 0.0f; }
+void halow_cfg_mcs_bw_refresh(void){ }
+void halow_gain_pilot_tick(void){ }
 
 static uint32_t g_wd_feeds;
 void mcu_watchdog_feed(void){ g_wd_feeds++; }

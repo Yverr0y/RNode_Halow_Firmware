@@ -18,6 +18,9 @@ RNS_SRC = ../../src/halow_pkg_handler.c \
           ../../src/rns/link_parser.c \
           ../../src/rns/link_utils.c \
           ../../src/rns/link_db.c \
+          ../../src/statistics.c \
+          ../../src/halow_chload.c \
+          ../../src/dhcpd_core.c \
           ../../sdk/lib/crypto/sha256.c
 
 RNS_OBJS = $(addprefix $(BUILD_DIR)/,$(notdir $(RNS_SRC:.c=.o)))
@@ -31,7 +34,10 @@ TEST_SRC = suite/test_ack_core.c \
            suite/test_ack_covfill.c \
            suite/test_rns_guards.c \
            suite/test_legacy_compat.c \
-           suite/test_link_db.c
+           suite/test_link_db.c \
+           suite/test_statistics.c \
+           suite/test_chload.c \
+           suite/test_dhcpd_core.c
 
 TEST_OBJS  = $(addprefix $(BUILD_DIR)/,$(TEST_SRC:.c=.o))
 QTEST_OBJS = $(addprefix $(QBUILD)/,$(TEST_SRC:.c=.o))
@@ -46,9 +52,9 @@ $(TARGET): $(BUILD_DIR)/main.o $(BUILD_DIR)/harness.o $(BUILD_DIR)/test_fw.o $(B
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(EXTRA_CFLAGS) $(BUILD_DIR)/main.o $(BUILD_DIR)/harness.o $(BUILD_DIR)/test_fw.o $(BUILD_DIR)/helpers.o $(BUILD_DIR)/halow_ack.o $(RNS_OBJS) $(TEST_OBJS) -o $(TARGET)
 
-$(SIZE_TARGET): $(BUILD_DIR)/size_test.o $(BUILD_DIR)/harness.o
+$(SIZE_TARGET): $(BUILD_DIR)/size_test.o $(BUILD_DIR)/harness.o $(BUILD_DIR)/statistics.o
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(EXTRA_CFLAGS) $(BUILD_DIR)/size_test.o $(BUILD_DIR)/harness.o -o $(SIZE_TARGET)
+	$(CC) $(EXTRA_CFLAGS) $(BUILD_DIR)/size_test.o $(BUILD_DIR)/harness.o $(BUILD_DIR)/statistics.o -o $(SIZE_TARGET)
 
 $(BUILD_DIR)/main.o: main.c harness.h stubs/basic_include.h
 	@mkdir -p $(BUILD_DIR)
@@ -99,6 +105,18 @@ $(BUILD_DIR)/link_utils.o: ../../src/rns/link_utils.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/link_db.o: ../../src/rns/link_db.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/statistics.o: ../../src/statistics.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/halow_chload.o: ../../src/halow_chload.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/dhcpd_core.o: ../../src/dhcpd_core.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -173,6 +191,10 @@ $(QBUILD)/link_utils.o: ../../src/rns/link_utils.c
 	$(CROSS) $(QFLAGS) -c $< -o $@
 
 $(QBUILD)/link_db.o: ../../src/rns/link_db.c
+	@mkdir -p $(QBUILD)
+	$(CROSS) $(QFLAGS) -c $< -o $@
+
+$(QBUILD)/statistics.o: ../../src/statistics.c
 	@mkdir -p $(QBUILD)
 	$(CROSS) $(QFLAGS) -c $< -o $@
 

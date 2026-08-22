@@ -18,6 +18,12 @@ void t_throttle_staging_drain( void );
 void t_window_gate( void );
 void t_tx_ready_gating( void );
 void t_ra_upshift( void );
+void t_ra_pin_to_config( void );
+void t_ra_retrans_down( void );
+void t_ra_deadline_feeds_ra( void );
+void t_ra_floor_is_configured( void );
+void t_ra_probe_cap_and_kick( void );
+void t_rxseq_retrans_no_poison( void );
 void t_is_internal_frame( void );
 void t_agg_size_per_mcs( void );
 void t_ack_evm_zero_encoding( void );
@@ -78,5 +84,28 @@ void t_cov_linkdb_fill_close_hijack( void );
 void t_cov_legacy_bundle_deliver( void );
 void t_env_peer_agg_off_still_acked( void );
 void t_cov_gap_fill( void );
+
+void t_stats_counters_exact( void );
+void t_stats_rate_iir_decay( void );
+void t_stats_rate_idle_clamp_zero( void );
+void t_stats_rate_wrap_guard( void );
+void t_stats_bc_repeat_air_counting( void );
+void t_stats_bc_repeat_vacancy_break( void );
+void t_stats_rx_air_pre_dedup( void );
+void t_stats_dest_broadcast_vs_unicast( void );
+void t_stats_roundtrip_symmetry( void );
+
+void t_chload_silent( void );
+void t_chload_tx_duty( void );
+void t_chload_rx_mcs( void );
+void t_chload_max( void );
+void t_chload_avg( void );
+void t_chload_sat_reset( void );
+
+void t_dhcpd_happy_path( void );
+void t_dhcpd_pool_exhaust( void );
+void t_dhcpd_nak_rules( void );
+void t_dhcpd_malformed( void );
+void t_dhcpd_build( void );
 
 #endif /* TEST_TESTS_H */

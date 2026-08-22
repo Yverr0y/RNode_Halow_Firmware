@@ -27,6 +27,7 @@ void t_soak_fid_roundtrip( void ){
     cfg.agg = 0;
     cfg.window = 16;
     node_start(&cfg);
+    halow_ack_cwnd_set(cfg.window);  /* soaks exercise the pool, not the governor */
 
     for( int i = 0; i < 1000; i++ ){
         fill_payload(f, sizeof(f), (uint8_t)i);
@@ -58,9 +59,13 @@ void t_soak_bundle_delayed_ack( void ){
     cfg.timeout_ms = 30;
     cfg.max_retries = 5;
     node_start(&cfg);
+    halow_ack_cwnd_set(cfg.window);  /* soaks exercise the pool, not the governor */
 
     for( int i = 0; i < 500; i++ ){
         fill_payload(f, sizeof(f), (uint8_t)i);
+        /* the deliberate late-ACKs look like congestion to the governor;
+         * this soak exercises RETRANSMIT mechanics, so pin the window */
+        halow_ack_cwnd_set(cfg.window);
         CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
         run_ticks(1, 5);
         if( (i % 3) == 0 ){
@@ -97,6 +102,7 @@ void t_soak_lossy_exhaust( void ){
     cfg.timeout_ms = 10;
     cfg.max_retries = 1;
     node_start(&cfg);
+    halow_ack_cwnd_set(cfg.window);  /* soaks exercise the pool, not the governor */
 
     for( int i = 0; i < 500; i++ ){
         fill_payload(f, sizeof(f), (uint8_t)i);
@@ -125,6 +131,7 @@ void t_soak_bidir_two_peers( void ){
     cfg_base(&cfg);
     cfg.window = 16;
     node_start(&cfg);
+    halow_ack_cwnd_set(cfg.window);  /* soaks exercise the pool, not the governor */
 
     for( int i = 0; i < 300; i++ ){
         fill_payload(f, sizeof(f), (uint8_t)i);
@@ -189,6 +196,7 @@ void t_soak_multipeer_pressure( void ){
     cfg.timeout_ms = 50;
     cfg.max_retries = 3;
     node_start(&cfg);
+    halow_ack_cwnd_set(cfg.window);  /* soaks exercise the pool, not the governor */
     fr_clear(&ring);
 
     for( int i = 0; i < 2000; i++ ){
@@ -223,6 +231,7 @@ void t_soak_window_one_serial( void ){
     cfg.agg = 0;
     cfg.window = 1;
     node_start(&cfg);
+    halow_ack_cwnd_set(cfg.window);  /* soaks exercise the pool, not the governor */
 
     for( int i = 0; i < 300; i++ ){
         fill_payload(f, sizeof(f), (uint8_t)i);

@@ -39,6 +39,7 @@ uint32_t fnv1a( const uint8_t *p, uint16_t len ){
 }
 
 void cfg_base( halow_ack_config_t *c ){
+    test_set_dflt_mcs(7);   /* baseline: tests wanting another rate re-set it */
     halow_ack_config_set_default(c);
     c->timeout_ms   = 50;
     c->max_retries  = 2;
