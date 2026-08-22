@@ -7,6 +7,7 @@
 #include "dhcpd_core.h"
 #include "net_ip.h"
 #include "configdb.h"
+#include "utils.h"
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/tcpip.h"

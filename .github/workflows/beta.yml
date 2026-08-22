@@ -1,17 +1,16 @@
-name: release
+name: beta-release
 
-# Release tag push (vX.Y.Z, no suffix) -> build firmware, package the
-# release tar, publish as a PRERELEASE with a placeholder body (filled
-# manually). Beta tags (vX.Y.Zb) are handled by beta-release.yml.
+# Beta tag push (vX.Y.Zb) -> build firmware, package the release tar,
+# publish as a PRERELEASE with a placeholder body (filled manually).
 on:
   push:
-    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+    tags: ['v*b']
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  beta:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
