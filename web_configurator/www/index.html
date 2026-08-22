@@ -249,7 +249,11 @@
                     <span>DHCP client</span>
                     <input type="checkbox" id="net_dhcp">
                 </label>
-                <label class="toggle-label">
+                <!-- DHCP server: hidden until the firmware side is fixed (does
+                     not work on real hardware yet). Element stays in the DOM
+                     so main.js keeps working; display:none because the base
+                     label rule (display:flex) would override the hidden attr -->
+                <label class="toggle-label" style="display:none">
                     <span>DHCP server</span>
                     <input type="checkbox" id="net_dhcp_srv">
                 </label>
