@@ -36,7 +36,7 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           NAME="RNode-Halow-${TAG//./_}"
-          tar -cf "${NAME}.tar" -C out fw.bin -C out/_filesystem www
+          tar -cf "${NAME}.tar" -C out fw.bin -C "$PWD/out/_filesystem" www
           tar -tvf "${NAME}.tar"
           sha256sum "${NAME}.tar" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "ASSET=${NAME}.tar" >> "$GITHUB_ENV"
