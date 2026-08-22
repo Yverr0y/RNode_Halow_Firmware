@@ -254,6 +254,11 @@ static void tcp_client_loop( struct netconn *client ){
     struct netbuf *held_nb = NULL;
     uint16_t held_chunk = 0u, held_ofs = 0u;
 
+    /* This is the only context allowed to block on DMA budget (TX-complete
+     * refunds) instead of shedding frames: blocking here closes the lwIP
+     * recv window and paces the sender. */
+    halow_tx_may_block_set(true);
+
     while( 1 ){
         if( !g_cfg.enabled ){
             os_sleep_ms(3000);
@@ -385,6 +390,8 @@ static void tcp_client_loop( struct netconn *client ){
         nb = NULL;
     }
 
+    halow_tx_may_block_set(false);
+
     if( held_nb != NULL ){
         netbuf_delete(held_nb);
     }
@@ -506,6 +513,7 @@ static void tcp_server_task( void *arg ){
         
         netconn_close(client);
         netconn_delete(client);
+        halow_tx_may_block_set(false);
 
         /* Bound the accept/close cycle rate: reconnect storms spin this loop
          * at full speed inside the pcb/netconn lifetime race window. */

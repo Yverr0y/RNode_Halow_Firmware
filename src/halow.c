@@ -435,6 +435,30 @@ static bool tx_budget_take( uint32_t len ){
     return ok;
 }
 
+static bool g_tx_may_block = false;
+
+void halow_tx_may_block_set(bool ok){
+    g_tx_may_block = ok;
+}
+
+/* Bounded wait for DMA budget on the DATA path only: a full LMAC TX buffer
+ * means the RF drains slower than TCP offers -- wait for TX-complete refunds
+ * instead of shedding the frame. Each iteration waits one completion chunk,
+ * so a wedged TX exits here within ~2 s and falls through to the -6 shed
+ * (the wedge watchdog purges independently). */
+#define HALOW_TX_BLOCK_CHUNK_MS 20u
+#define HALOW_TX_BLOCK_ITERS    100u
+static bool tx_budget_wait( uint32_t len ){
+    if( !g_tx_may_block ) return false;
+    for( uint32_t i = 0u; i < HALOW_TX_BLOCK_ITERS; i++ ){
+        if( os_sema_down(&g_tx_vacated_sem, (int32_t)HALOW_TX_BLOCK_CHUNK_MS) == 0 &&
+            tx_budget_take(len) ){
+            return true;
+        }
+    }
+    return false;
+}
+
 void halow_tx_skb_complete( struct sk_buff *skb ){
     if( skb == NULL ) return;
     bool full;
@@ -889,7 +913,7 @@ static int32_t halow_send_frame(const uint8_t *payload, uint32_t len,
 
     skb->priority = tid & 7u;
     skb->tx       = 1;
-    if( !tx_budget_take( skb->len ) ){
+    if( !tx_budget_take( skb->len ) && !tx_budget_wait( skb->len ) ){
         kfree_skb(skb);
         g_tx_dbg.tx_drop_budget++;
         return -6;

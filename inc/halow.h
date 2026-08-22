@@ -42,6 +42,11 @@ void halow_gain_pilot_dbg(int32_t *debris_x, int32_t *prod_x, int32_t *base_x);
 
 uint32_t halow_get_tx_vacancy(void);   /* free bytes in the bounded LMAC TX buffer (non-blocking) */
 void halow_tx_vacancy_watchdog(void);  /* self-heal the TX budget after lost TX-complete events */
+/* Opt in to bounded blocking on DMA budget in halow_send_frame. Only the
+ * tcps data path may do this: blocking there closes the lwIP recv window and
+ * paces the sender; every other context (acktk retransmits, RX-path ACKs)
+ * keeps the try-and-drop contract. */
+void halow_tx_may_block_set(bool ok);
 /* TX-complete accounting (budget, sender wakeup, free); also used by the
  * hard-wedge purge for frames that will never complete. */
 struct sk_buff;
