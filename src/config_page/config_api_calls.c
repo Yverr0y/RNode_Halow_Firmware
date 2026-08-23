@@ -1447,8 +1447,6 @@ int32_t web_api_nearby_modems_get( const cJSON *in, cJSON *out ){
         uint8_t tx_mcs = has_tx ? ((ps.tx_mcs == HALOW_MCS_DEFAULT) ? default_tx_mcs : ps.tx_mcs)
                                 : default_tx_mcs;
         cJSON_AddNumberToObject(row, "tx_mcs",          (double)tx_mcs);
-        cJSON_AddNumberToObject(row, "compat",          (double)ps.compat);
-        cJSON_AddNumberToObject(row, "l0_falls",        (double)ps.l0_falls);
         cJSON_AddNumberToObject(row, "tx_evm",          (double)(has_tx ? ps.evm : 0));
         cJSON_AddNumberToObject(row, "tx_frames",       (double)(has_tx ? ps.tx_frames : 0));
         cJSON_AddNumberToObject(row, "tx_bytes",        (double)(has_tx ? ps.tx_bytes : 0));
@@ -1493,7 +1491,6 @@ int32_t web_api_ack_cfg_get( const cJSON *in, cJSON *out ){
     cJSON_AddNumberToObject(out, "agg_bytes",   (double)cfg.agg_bytes);
     cJSON_AddNumberToObject(out, "ack_hold_ms", (double)cfg.ack_hold_ms);
     cJSON_AddNumberToObject(out, "bc_repeat", (double)cfg.bc_repeat);
-    cJSON_AddNumberToObject(out, "env",       (double)cfg.env);
 #ifdef FW_BUILD_BETA
     {
         halow_ack_stats_t st;
@@ -1563,7 +1560,6 @@ int32_t web_api_ack_cfg_post( const cJSON *in, cJSON *out ){
     if (json_get_int(in, "window", &v)) { if (v >= 4 && v <= 16) cfg.window = (uint8_t)v; }
     if (json_get_int(in, "fids",   &v)) { if (v >= 1 && v <= 32) cfg.ack_fids  = (uint8_t)v; }
     if (json_get_int(in, "bc_repeat", &v)) { if (v >= 1 && v <= HALOW_ACK_BC_REPEAT_MAX) cfg.bc_repeat = (uint8_t)v; }
-    if (json_get_int(in, "env",       &v)) { cfg.env = (uint8_t)(v ? 1u : 0u); }   /* 0 = force legacy formats (interop test gate) */
     if (json_get_int(in, "ack_hold_ms", &v)) { if (v >= 0 && v <= 100) cfg.ack_hold_ms  = (uint16_t)v; }
     halow_ack_config_apply(&cfg);
     return web_api_ack_cfg_get(NULL, out);

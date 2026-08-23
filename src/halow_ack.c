@@ -27,7 +27,6 @@
 #define ACK_SLOT_LIFE_MAX_MS  6000u
 #define ACK_AGG_MAX_HOLD_MS   1000u
 
-#define ACK_L0_STRIKES        12u
 #define ACK_BACKOFF_SHIFT_MAX 3u
 
 #define RA_MAX_MCS    7u
@@ -45,12 +44,6 @@ static jiffy_t now_j( void ){
 static jiffy_t ms_j( uint32_t ms ){
     return (jiffy_t)os_msecs_to_jiffies(ms);
 }
-
-enum halow_l1_compat {
-    HALOW_COMPAT_PLAIN    = 0,
-    HALOW_COMPAT_LEGACY   = 1,
-    HALOW_COMPAT_ENVELOPE = 2,
-};
 
 enum ack_buf_state {
     ACK_BUF_STAGING  = 2,
@@ -104,14 +97,10 @@ typedef struct {
     uint16_t agg_len;
     uint8_t  agg_nsub;
     jiffy_t  agg_first_jiff;
-    uint8_t  compat;
     uint16_t tx_seq;
     uint16_t rx_seq_last;
     uint64_t rx_seq_win;
     bool     rx_seq_seen;
-    uint32_t l0_strikes;
-    uint8_t  ack_probe_cnt;
-    uint32_t l0_falls;
     jiffy_t  created_jiff;
     /* collapse memory: the highest rate a downshift abandoned; climbs above
      * failed_top-1 stay blocked while the collapse episode is fresh */
@@ -358,7 +347,6 @@ static ack_peer_t *peer_create( const uint8_t mac[6], uint8_t init_mcs ){
     p->cur_retries  = g_ack_cfg.max_retries;
     p->tx_mcs       = init_mcs;
     p->created_jiff = now_j();
-    p->compat       = HALOW_COMPAT_LEGACY;
     p->last_seen    = now_j();
     return p;
 }
@@ -375,7 +363,6 @@ static ack_peer_t *peer_get( const uint8_t mac[6] ){
             p->loss_q8           = 0;
             p->acks_since_step   = 0;
             p->next_step_allowed = 0;
-            p->compat            = HALOW_COMPAT_LEGACY;
             p->rx_seq_seen       = false;
             p->rx_seq_win        = 0u;
             p->failed_top        = 0u;
@@ -422,20 +409,17 @@ static void peer_rx_seq( ack_peer_t *p, uint16_t seq ){
      * and ~50% phantom loss on a clean channel). Old seqs inside the window
      * are already-marked duplicates: ignore them. */
     uint16_t back = (uint16_t)(p->rx_seq_last - seq);
-    if( back < HALOW_ACK_SEQ_WINDOW ) return;
+    if( back < HALOW_ACK_SEQ_WINDOW ){
+        /* late (out-of-order) arrival: MARK it received. Ignoring it left
+         * the bit clear, so the bitmap ACK never covered the seq, the
+         * sender kept retransmitting it, and every retransmit was a fresh
+         * delivery -- duplicates at the peer. */
+        p->rx_seq_win |= (1u << back);
+        return;
+    }
     /* genuine far jump forward: re-sync */
     p->rx_seq_last = seq;
     p->rx_seq_win  = 1u;
-}
-
-static void peer_note_dead_bundle( ack_peer_t *p ){
-    p->l0_strikes++;
-    if( p->compat != HALOW_COMPAT_LEGACY || p->l0_strikes < ACK_L0_STRIKES ) return;
-    p->compat   = HALOW_COMPAT_PLAIN;
-    p->l0_strikes = 0u;
-    p->l0_falls++;
-    log_warn("ack: peer %02x:%02x:%02x:%02x:%02x:%02x -> L0 (plain-only, dead bundles)",
-             p->mac[0],p->mac[1],p->mac[2],p->mac[3],p->mac[4],p->mac[5]);
 }
 
 /* ================= default MCS cache ================= */
@@ -706,7 +690,6 @@ void halow_ack_config_set_default( halow_ack_config_t *cfg ){
     cfg->agg_bytes     = HALOW_ACK_AGG_PAYLOAD_MAX;
     cfg->ack_hold_ms   = HALOW_ACK_ACK_HOLD_MS_DEF;
     cfg->bc_repeat     = HALOW_ACK_BC_REPEAT_DEF;
-    cfg->env           = 1u;
 }
 
 static void config_clamp( halow_ack_config_t *cfg ){
@@ -732,7 +715,6 @@ static void config_clamp( halow_ack_config_t *cfg ){
         cfg->ack_hold_ms = (uint16_t)(cfg->timeout_ms / 2u);
     if( cfg->bc_repeat < 1u )                      cfg->bc_repeat = 1u;
     if( cfg->bc_repeat > HALOW_ACK_BC_REPEAT_MAX ) cfg->bc_repeat = HALOW_ACK_BC_REPEAT_MAX;
-    cfg->env = cfg->env ? 1u : 0u;
 }
 
 static void config_cache( void ){
@@ -776,7 +758,6 @@ void halow_ack_config_load( halow_ack_config_t *cfg ){
     configdb_get_i16(ACK_CFG("aggbytes"), (int16_t *)&cfg->agg_bytes);
     configdb_get_i8 (ACK_CFG("ackhold"),  (int8_t *)&cfg->ack_hold_ms);
     configdb_get_i8 (ACK_CFG("bcrep"),    (int8_t *)&cfg->bc_repeat);
-    configdb_get_i8 (ACK_CFG("env"),      (int8_t *)&cfg->env);
     config_clamp(cfg);
 }
 
@@ -793,7 +774,6 @@ void halow_ack_config_save( const halow_ack_config_t *cfg ){
     configdb_set_i16(ACK_CFG("aggbytes"), (int16_t *)&cfg->agg_bytes);
     configdb_set_i8 (ACK_CFG("ackhold"),  (int8_t *)&cfg->ack_hold_ms);
     configdb_set_i8 (ACK_CFG("bcrep"),    (int8_t *)&cfg->bc_repeat);
-    configdb_set_i8 (ACK_CFG("env"),      (int8_t *)&cfg->env);
 }
 
 void halow_ack_config_get_live( halow_ack_config_t *cfg ){
@@ -900,12 +880,7 @@ static uint8_t ack_mcs_for_peer( const uint8_t dest_mac[6] ){
 }
 
 static bool env_ack_capture_locked( ack_peer_t *p, uint16_t *base, uint64_t *bm ){
-    bool probe = ( p->compat < HALOW_COMPAT_ENVELOPE ) && ( g_ack_cfg.env != 0u )
-                 && ( ++p->ack_probe_cnt >= 8u );
-    if( probe ) p->ack_probe_cnt = 0u;
-    if( !( ( p->compat == HALOW_COMPAT_ENVELOPE ) || probe ) ) return false;
-    if( g_ack_cfg.env == 0u ) return false;
-
+    if( !p->rx_seq_seen ) return false;   /* plain-only heard: fid-list ACK */
     *base = (uint16_t)(p->rx_seq_last - (HALOW_ACK_SEQ_WINDOW - 1u));
     *bm   = 0u;
     for( uint32_t i = 0u; i < HALOW_ACK_SEQ_WINDOW; i++ ){
@@ -1015,7 +990,7 @@ static bool agg_flush_locked( ack_peer_t *p ){
     b->born_jiff    = now_j();
     b->seq          = 0xFFFFu;
 
-    if( p->compat == HALOW_COMPAT_ENVELOPE && g_ack_cfg.env != 0u ){
+    {
         uint16_t seq = p->tx_seq++;
         if( seq == 0xFFFFu ) seq = p->tx_seq++;
         b->seq    = seq;
@@ -1034,35 +1009,6 @@ static bool agg_flush_locked( ack_peer_t *p ){
         buf_tx_send(b, pmcs);
         return true;
     }
-
-    if( nsub == 1u ){
-        uint16_t plen = (uint16_t)((uint16_t)b->data[ACK_AGG_RESERVE] |
-                                   ((uint16_t)b->data[ACK_AGG_RESERVE + 1u] << 8));
-        if( plen == 0u || (uint32_t)plen + 2u > staged - ACK_AGG_RESERVE ){
-            buf_release(b);
-            g_ack_stats.dropped++;
-            p->dropped++;
-            return true;
-        }
-        b->ofs = ACK_AGG_RESERVE + 2u;
-        b->len = plen;
-        b->fid = (uint16_t)(fnv1a(&b->data[b->ofs], plen) & 0xFFFFu);
-        if( b->fid == 0u ) b->fid = 0xFFFFu;
-        peer_note_tx(p, plen, plen);
-        buf_tx_send(b, pmcs);
-        return true;
-    }
-
-    b->ofs = ACK_AGG_RESERVE - 3u;
-    b->len = (uint16_t)(staged - (ACK_AGG_RESERVE - 3u));
-    b->data[b->ofs]     = HALOW_ACK_AGG_MAGIC0;
-    b->data[b->ofs + 1] = HALOW_ACK_AGG_MAGIC1;
-    b->data[b->ofs + 2] = nsub;
-    b->fid = (uint16_t)(fnv1a(&b->data[b->ofs], b->len) & 0xFFFFu);
-    if( b->fid == 0u ) b->fid = 0xFFFFu;
-    peer_note_tx(p, b->len, b->len);
-    buf_tx_send(b, pmcs);
-    return true;
 }
 
 /* ================= data transmit ================= */
@@ -1120,6 +1066,20 @@ static uint16_t staging_alloc_cap( uint16_t eff_payload ){
 static int32_t tx_bundle_locked( ack_peer_t *p, const uint8_t *payload,
                                  uint16_t len, const uint8_t dest_mac[6],
                                  uint8_t pmcs, uint16_t eff_payload ){
+    if( len == 0u ){
+        g_ack_stats.dropped++;
+        p->dropped++;
+        ack_unlock();
+        return 0;                   /* empty sub: rejected at the door */
+    }
+    if( g_ack_cfg.agg == 0u ){
+        /* solo mode: every frame needs its own inflight slot NOW */
+        if( (uint32_t)g_inflight_n >= eff_window() ||
+            (uint32_t)(ACK_BUF_N - g_used_n) < 1u ){
+            ack_unlock();
+            return HALOW_ACK_TX_THROTTLE;
+        }
+    }
     ack_buf_t *sb = ( p->agg_idx != 0u ) ? g_bufs[p->agg_idx - 1u] : NULL;
     if( sb != NULL && bundle_full_for(p, sb, len, eff_payload) ){
         (void)agg_flush_locked(p);
@@ -1153,7 +1113,8 @@ static int32_t tx_bundle_locked( ack_peer_t *p, const uint8_t *payload,
     p->agg_nsub++;
 
     uint32_t payload_sum = (uint32_t)p->agg_len - ACK_AGG_RESERVE - 2u*p->agg_nsub;
-    if( p->agg_nsub >= HALOW_ACK_AGG_MAX_SUB ||
+    if( g_ack_cfg.agg == 0u ||
+        p->agg_nsub >= HALOW_ACK_AGG_MAX_SUB ||
         (uint32_t)p->agg_len + 2u > sb->cap ||
         payload_sum >= eff_payload ){
         (void)agg_flush_locked(p);
@@ -1233,13 +1194,12 @@ static int32_t ack_tx_uc( const uint8_t *payload, uint16_t len, const uint8_t de
     }
 
     /* Envelope peers ack by bundle SEQ bitmap: a plain frame (seq 0xFFFF)
-     * can never match, so env peers always ride seq'd bundles -- even with
-     * agg disabled or a frame over the MCS-sized bundle budget. */
+     * can never match, so tracked frames always ride seq'd bundles -- even
+     * with agg disabled or a frame over the MCS-sized bundle budget. */
     uint16_t eff_payload = eff_agg_bytes(pmcs);
-    bool env_peer = ( p->compat == HALOW_COMPAT_ENVELOPE ) && ( g_ack_cfg.env != 0u );
-    if( ( ( g_ack_cfg.agg != 0u && (uint32_t)len <= eff_payload ) ||
-          ( env_peer && (uint32_t)len <= ACK_WIRE_MAX ) ) &&
-        len <= ACK_WIRE_MAX ){
+    uint32_t wire_len = (uint32_t)len + (HALOW_ENV_BUNDLE_HDR + 2u);
+    if( ( g_ack_cfg.agg != 0u && (uint32_t)len <= eff_payload ) ||
+        wire_len <= ACK_WIRE_MAX ){
         g_ack_stats.dbg_path_bundle++;
         return tx_bundle_locked(p, payload, len, dest_mac, pmcs, eff_payload);
     }
@@ -1286,13 +1246,31 @@ static void rx_env_ack_locked( ack_peer_t *p, const uint8_t *payload ){
     }
 }
 
+/* bundle subframe walk: [len_le16][payload] x nsub must end exactly at len.
+ * A bundle that fails it is garbage (or corrupt): consumed as unknown,
+ * and its SEQ is never recorded -- a later valid retransmission of that
+ * seq must still be deliverable. */
+static bool env_bundle_walk_ok( const uint8_t *payload, uint16_t len ){
+    uint32_t off = HALOW_ENV_BUNDLE_HDR;
+    uint8_t  nsub = payload[5];
+    for( uint32_t i = 0u; i < nsub; i++ ){
+        if( off + 2u > len ) return false;
+        uint16_t sl = (uint16_t)((uint16_t)payload[off] | ((uint16_t)payload[off + 1u] << 8));
+        off += 2u;
+        if( off + sl > len ) return false;
+        off += sl;
+    }
+    return off == len;
+}
+
 static bool rx_env( const uint8_t *payload, uint16_t len, const uint8_t src_mac[6] ){
     uint8_t ver  = halow_env_ver(payload);
     uint8_t type = halow_env_type(payload);
     bool is_ack    = ( ver == HALOW_ENV_VER ) && ( type == HALOW_ENV_TYPE_ACK )
                      && ( len == HALOW_ENV_ACK_LEN );
     bool is_bundle = ( ver == HALOW_ENV_VER ) && ( type == HALOW_ENV_TYPE_BUNDLE )
-                     && ( len >= HALOW_ENV_BUNDLE_HDR + 2u );
+                     && ( len >= HALOW_ENV_BUNDLE_HDR + 2u )
+                     && env_bundle_walk_ok(payload, len);
     if( !is_ack && !is_bundle ){
         g_ack_stats.rx_env_unk++;
         return true;
@@ -1300,10 +1278,6 @@ static bool rx_env( const uint8_t *payload, uint16_t len, const uint8_t src_mac[
 
     ack_lock();
     ack_peer_t *p = peer_find(src_mac);
-    if( p != NULL && p->compat < HALOW_COMPAT_ENVELOPE ){
-        p->compat = HALOW_COMPAT_ENVELOPE;
-        p->l0_strikes = 0u;
-    }
     if( is_ack ){
         if( p != NULL ) rx_env_ack_locked(p, payload);
         ack_unlock();
@@ -1311,8 +1285,20 @@ static bool rx_env( const uint8_t *payload, uint16_t len, const uint8_t src_mac[
     }
     if( p != NULL ){
         uint16_t seq = (uint16_t)((uint16_t)payload[3] | ((uint16_t)payload[4] << 8));
+        bool retrans = false;
+        if( p->rx_seq_seen ){
+            uint16_t back = (uint16_t)(p->rx_seq_last - seq);
+            if( back < HALOW_ACK_SEQ_WINDOW && ( (p->rx_seq_win >> back) & 1u ) ){
+                retrans = true;         /* seq already delivered once */
+            }
+        }
         peer_rx_seq(p, seq);
         g_ack_stats.env_rx_bundles++;
+        if( retrans ){
+            g_ack_stats.acks_rx_dup++;  /* retransmission: consumed, not delivered */
+            ack_unlock();
+            return true;
+        }
     }
     ack_unlock();
     return false;
@@ -1340,7 +1326,6 @@ static void rx_ack( const uint8_t *payload, uint16_t len, const uint8_t src_mac[
         if( ack_fid == 0u ) continue;
         ack_buf_t *b = buf_match(src_mac, ack_fid);
         if( b != NULL ){
-            if( p != NULL ) p->l0_strikes = 0u;
             rtt_record( now_j() - b->born_jiff,
                         now_j() - b->tx_jiff,
                         b->retries_used );
@@ -1351,17 +1336,6 @@ static void rx_ack( const uint8_t *payload, uint16_t len, const uint8_t src_mac[
         }else{
             g_ack_stats.acks_rx_dup++;
         }
-    }
-    ack_unlock();
-}
-
-static void rx_note_magic_seen( const uint8_t src_mac[6] ){
-    ack_lock();
-    ack_peer_t *p = peer_find(src_mac);
-    if( p != NULL && p->compat == HALOW_COMPAT_PLAIN ){
-        p->compat = HALOW_COMPAT_LEGACY;
-        log_info("ack: peer %02x:%02x:%02x:%02x:%02x:%02x L0 -> L1 (magic traffic seen)",
-                 p->mac[0],p->mac[1],p->mac[2],p->mac[3],p->mac[4],p->mac[5]);
     }
     ack_unlock();
 }
@@ -1431,9 +1405,6 @@ bool halow_ack_on_rx( const uint8_t *payload, uint16_t len, const uint8_t src_ma
     }else if( is_ack_frame(payload, len) ){
         rx_ack(payload, len, src_mac);
         return false;
-    }else if( len >= 3u &&
-              payload[0] == HALOW_ACK_AGG_MAGIC0 && payload[1] == HALOW_ACK_AGG_MAGIC1 ){
-        rx_note_magic_seen(src_mac);
     }
 
     return rx_data(payload, len, src_mac, dst_mac, evm, out_payload, out_len);
@@ -1448,7 +1419,6 @@ static void buf_drop_deadline( ack_buf_t *b ){
     g_ack_stats.drop_deadline++;
     if( p != NULL ){
         p->dropped++;
-        peer_note_dead_bundle(p);
         /* No vacancy gate here: a slot dying at its life deadline IS loss
          * evidence, and under load the vacancy gate is almost always closed,
          * which blinded RA exactly when it needed to downshift. */
@@ -1490,7 +1460,6 @@ static void buf_retransmit_or_drop( ack_buf_t *b, jiffy_t now ){
         g_ack_stats.dropped++;
         g_ack_stats.drop_exhaust++;
         p->dropped++;
-        peer_note_dead_bundle(p);
         ra_on_drop(p);
         return;
     }
@@ -1533,8 +1502,6 @@ static void tick_service_bufs( jiffy_t now ){
  * the TCP side runs dry. A bundle still staged here means the RF gates have
  * been closed for a full second -- drop rather than wedge the peer. */
 static void tick_flush_held_bundles( jiffy_t now ){
-    if( g_ack_cfg.agg == 0u ) return;
-
     for( uint32_t i = 0; i < ACK_MAX_PEERS; i++ ){
         ack_peer_t *p = &g_peers[i];
         if( !p->in_use || p->agg_idx == 0u ) continue;
@@ -1678,8 +1645,6 @@ bool halow_ack_peer_stats_by_mac( const uint8_t mac[6], halow_ack_peer_stats_t *
         out->loss_pct       = (uint8_t)((uint32_t)p->loss_q8 * 100u / 256u);
         out->acks_since_step = p->acks_since_step;
         out->loss_q8        = p->loss_q8;
-        out->compat         = p->compat;
-        out->l0_falls       = p->l0_falls;
         int32_t rem = (int32_t)(p->next_step_allowed - now_j());
         out->gap_ms = (rem <= 0) ? 0 : (int32_t)os_jiffies_to_msecs((uint64_t)(jiffy_t)rem);
     }

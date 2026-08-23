@@ -37,7 +37,7 @@ void t_cov_ack_misc( void ){
         CHECK( halow_ack_link_busy() );
         run_ticks(2, 5);
         CHECK( !halow_ack_radio_quiet() );   /* outstanding buf */
-        ack_fid(PEER_A, fid_of(f, sizeof(f)));
+        ack_fid(PEER_A, wire_fid_of(f, sizeof(f)));
         {
             halow_ack_stats_t dbg;
             halow_ack_stats_get(&dbg);
@@ -188,7 +188,6 @@ void t_cov_ack_tx_fail( void ){
     {
         halow_ack_peer_stats_t ps;
         env_peer_ready(PEER_D);
-        CHECK( halow_ack_peer_stats_by_mac(PEER_D, &ps) && ps.compat == 2 );
         test_tx_fail_next(1);
         fill_payload(f, sizeof(f), 4);
         CHECK( rx_frame(PEER_D, f, sizeof(f), EVM_M10) );
@@ -270,7 +269,7 @@ void t_cov_gap_fill( void ){
     }
 
     /* free the window: the held frame goes through on retry, no re-feed */
-    ack_fid(PEER_A, (uint16_t)(fnv1a(pkt[1], plen[1]) & 0xFFFFu));
+    ack_fid(PEER_A, wire_fid_of(pkt[1], plen[1]));
     CHECK( rns_stream_decoder_retry_held(&g_dec, NULL) == 0 );
     fp_idle();
     fp_idle();

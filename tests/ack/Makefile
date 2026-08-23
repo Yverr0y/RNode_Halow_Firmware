@@ -198,6 +198,14 @@ $(QBUILD)/statistics.o: ../../src/statistics.c
 	@mkdir -p $(QBUILD)
 	$(CROSS) $(QFLAGS) -c $< -o $@
 
+$(QBUILD)/halow_chload.o: ../../src/halow_chload.c
+	@mkdir -p $(QBUILD)
+	$(CROSS) $(QFLAGS) -c $< -o $@
+
+$(QBUILD)/dhcpd_core.o: ../../src/dhcpd_core.c
+	@mkdir -p $(QBUILD)
+	$(CROSS) $(QFLAGS) -c $< -o $@
+
 $(QBUILD)/sha256.o: ../../sdk/lib/crypto/sha256.c
 	@mkdir -p $(QBUILD)
 	$(CROSS) $(QFLAGS) -c $< -o $@

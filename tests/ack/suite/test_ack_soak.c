@@ -32,7 +32,7 @@ void t_soak_fid_roundtrip( void ){
     for( int i = 0; i < 1000; i++ ){
         fill_payload(f, sizeof(f), (uint8_t)i);
         CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
-        ack_fid(PEER_A, fid_of(f, sizeof(f)));
+        ack_fid(PEER_A, wire_fid_of(f, sizeof(f)));
         if( (i % 50) == 49 ) halow_ack_tick();
     }
     run_ticks(2, 5);
@@ -69,13 +69,13 @@ void t_soak_bundle_delayed_ack( void ){
         CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
         run_ticks(1, 5);
         if( (i % 3) == 0 ){
-            lost[lost_n++] = fid_of(f, sizeof(f));
+            lost[lost_n++] = wire_fid_of(f, sizeof(f));
             if( lost_n == 10 ){
                 for( int k = 0; k < lost_n; k++ ) ack_fid(PEER_A, lost[k]);
                 lost_n = 0;
             }
         }else{
-            ack_fid(PEER_A, fid_of(f, sizeof(f)));
+            ack_fid(PEER_A, wire_fid_of(f, sizeof(f)));
         }
     }
     run_ticks(10, 10);
@@ -107,7 +107,7 @@ void t_soak_lossy_exhaust( void ){
     for( int i = 0; i < 500; i++ ){
         fill_payload(f, sizeof(f), (uint8_t)i);
         CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
-        if( (i % 4) != 0 ) ack_fid(PEER_A, fid_of(f, sizeof(f)));
+        if( (i % 4) != 0 ) ack_fid(PEER_A, wire_fid_of(f, sizeof(f)));
         run_ticks(1, 25);
     }
 
@@ -137,7 +137,7 @@ void t_soak_bidir_two_peers( void ){
         fill_payload(f, sizeof(f), (uint8_t)i);
         CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
         run_ticks(1, 5);
-        ack_fid(PEER_A, fid_of(f, sizeof(f)));
+        ack_fid(PEER_A, wire_fid_of(f, sizeof(f)));
 
         fill_payload(f, sizeof(f), (uint8_t)(i + 77));
         CHECK( halow_ack_tx(f, sizeof(f), PEER_B) == 0 );
@@ -147,9 +147,9 @@ void t_soak_bidir_two_peers( void ){
             pend_fid = 0;
         }
         if( (i % 50) == 49 ){
-            pend_fid = fid_of(f, sizeof(f));
+            pend_fid = wire_fid_of(f, sizeof(f));
         }else{
-            ack_fid(PEER_B, fid_of(f, sizeof(f)));
+            ack_fid(PEER_B, wire_fid_of(f, sizeof(f)));
         }
 
         fill_payload(rx, sizeof(rx), (uint8_t)(i + 200));
@@ -171,7 +171,7 @@ void t_soak_bidir_two_peers( void ){
     CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
     run_ticks(1, 5);
     {
-        uint16_t fa = fid_of(f, sizeof(f));
+        uint16_t fa = wire_fid_of(f, sizeof(f));
         halow_ack_stats_get(&st);
         CHECK( st.outstanding == 1 );
         ack_fid(PEER_B, fa);
@@ -204,7 +204,7 @@ void t_soak_multipeer_pressure( void ){
         fill_payload(f, sizeof(f), (uint8_t)i);
         CHECK( halow_ack_tx(f, sizeof(f), m) == 0 );
         run_ticks(1, 5);
-        fr_push(&ring, m, fid_of(f, sizeof(f)));
+        fr_push(&ring, m, wire_fid_of(f, sizeof(f)));
         if( (i % 97) != 96 ) fr_ack_all(&ring);
     }
     for( int k = 0; k < 10; k++ ){
@@ -238,7 +238,7 @@ void t_soak_window_one_serial( void ){
         CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
         halow_ack_stats_get(&st);
         CHECK( st.outstanding == 1 );
-        ack_fid(PEER_A, fid_of(f, sizeof(f)));
+        ack_fid(PEER_A, wire_fid_of(f, sizeof(f)));
         halow_ack_stats_get(&st);
         CHECK( st.outstanding == 0 );
     }

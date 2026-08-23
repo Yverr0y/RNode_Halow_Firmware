@@ -129,12 +129,6 @@ static bool is_env_bundle( const uint8_t *pkg, uint16_t len ){
              halow_env_ver(pkg) == HALOW_ENV_VER );
 }
 
-static bool is_legacy_bundle( const uint8_t *pkg, uint16_t len ){
-    return ( len >= 4u &&
-             pkg[0] == HALOW_ACK_AGG_MAGIC0 && pkg[1] == HALOW_ACK_AGG_MAGIC1 &&
-             pkg[2] >= 2u );
-}
-
 void halow_pkg_handler_rf_to_tcp( uint8_t* pkg, uint16_t len,
                                   const uint8_t *src_mac, const uint8_t *dst_mac,
                                   int8_t evm ){
@@ -155,12 +149,6 @@ void halow_pkg_handler_rf_to_tcp( uint8_t* pkg, uint16_t len,
         }
         bundle_split_deliver(pkg, len, HALOW_ENV_BUNDLE_HDR, pkg[5],
                              src_mac, unicast_to_me);
-        return;
-    }
-
-    if( is_legacy_bundle(pkg, len) &&
-        bundle_walk_valid(pkg, len, 3u, pkg[2]) ){
-        bundle_split_deliver(pkg, len, 3u, pkg[2], src_mac, unicast_to_me);
         return;
     }
 

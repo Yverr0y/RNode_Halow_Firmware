@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* legacy fid-list ACK: [A5][5A][evm int8][fid16 x n]; evm >= 0x80 */
+/* fid-list ACK: [A5][5A][evm int8][fid16 x n]; evm >= 0x80 */
 #define HALOW_ACK_MAGIC0           0xA5u
 #define HALOW_ACK_MAGIC1           0x5Au
 #define HALOW_ACK_ACK_LEN_MIN      5u
@@ -12,11 +12,9 @@
 #define HALOW_ACK_ACK_MCS_MIN      1u
 #define HALOW_ACK_ACK_MCS_MAX      6u
 
-/* A-MSDU bundle: [A5][AD][nsub]([len_le16][payload])*
+/* envelope A-MSDU bundle: [A5][5A][ver/type][seq_le16][nsub]([len_le16][payload])*
  * One tracked frame carries at most 4000 payload bytes (2x2000 or 8x500 MTU
  * packets) so high-MCS peers get long airtime-efficient frames. */
-#define HALOW_ACK_AGG_MAGIC0          0xA5u
-#define HALOW_ACK_AGG_MAGIC1          0xADu
 #define HALOW_ACK_AGG_MAX_SUB         8u
 #define HALOW_ACK_AGG_PAYLOAD_MAX     4000u
 #define HALOW_ACK_ACK_HOLD_MS_DEF     5u    /* fast bitmap ACKs shrink the RTT loop */
@@ -66,7 +64,6 @@ typedef struct {
     uint16_t agg_bytes;
     uint16_t ack_hold_ms;
     uint8_t  bc_repeat;
-    uint8_t  env;
 } halow_ack_config_t;
 
 typedef struct {
@@ -130,8 +127,6 @@ typedef struct {
     uint16_t acks_since_step;
     uint16_t loss_q8;       /* RA tuning loss EWMA, 0..256 == 0..100% */
     int32_t  gap_ms;
-    uint8_t  compat;        /* 0 plain-only, 1 legacy magics, 2 envelope */
-    uint32_t l0_falls;
 } halow_ack_peer_stats_t;
 
 void halow_ack_config_set_default(halow_ack_config_t *cfg);

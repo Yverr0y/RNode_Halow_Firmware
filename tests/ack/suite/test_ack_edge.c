@@ -32,8 +32,8 @@ void t_edge_frame_size_boundaries( void ){
     CHECK( halow_ack_tx(big, 1, PEER_A) == 0 );
     CHECK( test_tx_count() == 0 );
     run_ticks(1, 5);
-    CHECK( test_tx_count() == 1 && test_tx_at(0)->len == 1 );
-    ack_fid(PEER_A, fid_of(big, 1));
+    CHECK( test_tx_count() == 1 && test_tx_at(0)->len == 6u + 2u + 1u );
+    ack_fid(PEER_A, wire_fid_of(big, 1));
 
     /* 4000 = biggest single payload that may ride a bundle (2x2000 MTU);
      * it fills the bundle alone and leaves immediately, unwrapped to plain */
@@ -41,23 +41,23 @@ void t_edge_frame_size_boundaries( void ){
     wire = test_tx_count();
     CHECK( halow_ack_tx(big, 4000, PEER_A) == 0 );
     CHECK( test_tx_count() == wire + 1 );
-    CHECK( test_tx_at(wire)->len == 4000 );
-    ack_fid(PEER_A, fid_of(big, 4000));
+    CHECK( test_tx_at(wire)->len == 6u + 2u + 4000u );
+    ack_fid(PEER_A, wire_fid_of(big, 4000));
 
     /* 4001..4022: too big to bundle, still plain-tracked */
     fill_payload(big, 4001, 3);
     wire = test_tx_count();
     CHECK( halow_ack_tx(big, 4001, PEER_A) == 0 );
     run_ticks(1, 5);
-    CHECK( test_tx_count() == wire + 1 && test_tx_at(wire)->len == 4001 );
-    ack_fid(PEER_A, fid_of(big, 4001));
+    CHECK( test_tx_count() == wire + 1 && test_tx_at(wire)->len == 6u + 2u + 4001u );
+    ack_fid(PEER_A, wire_fid_of(big, 4001));
 
     fill_payload(big, 4022, 4);
     wire = test_tx_count();
     CHECK( halow_ack_tx(big, 4022, PEER_A) == 0 );
     run_ticks(1, 5);
     CHECK( test_tx_count() == wire + 1 && test_tx_at(wire)->len == 4022 );
-    ack_fid(PEER_A, fid_of(big, 4022));
+    ack_fid(PEER_A, wire_fid_of(big, 4022));
 
     /* over ACK_WIRE_MAX: untracked broadcast, goes out immediately */
     fill_payload(big, 4023, 5);
@@ -95,9 +95,9 @@ void t_edge_bundle_exact_fit( void ){
     fill_payload(f, 2000, 2);
     CHECK( halow_ack_tx(f, 2000, PEER_A) == 0 );
     CHECK( test_tx_count() == 1 );
-    CHECK( test_tx_at(0)->len == 3u + 2u*2u + 2u*2000u );
-    CHECK( test_tx_at(0)->buf[0] == 0xA5 && test_tx_at(0)->buf[1] == 0xAD );
-    CHECK( test_tx_at(0)->buf[2] == 2 );
+    CHECK( test_tx_at(0)->len == 6u + 2u*2u + 2u*2000u );
+    CHECK( test_tx_at(0)->buf[0] == 0xA5 && test_tx_at(0)->buf[1] == 0x5A );
+    CHECK( test_tx_at(0)->buf[5] == 2 );
     ack_fid(PEER_A, (uint16_t)(fnv1a(test_tx_at(0)->buf, test_tx_at(0)->len) & 0xFFFFu));
 
     /* envelope peer: same 2x2000 -> env wire = 6 hdr + 4 lens + 4000 = 4010 */
@@ -123,8 +123,8 @@ void t_edge_bundle_exact_fit( void ){
         CHECK( halow_ack_tx(f, 500, PEER_A) == 0 );
     }
     CHECK( test_tx_count() == 1 );
-    CHECK( test_tx_at(0)->buf[2] == 8 );
-    CHECK( test_tx_at(0)->len == 3u + 2u*8u + 8u*500u );
+    CHECK( test_tx_at(0)->buf[5] == 8 );
+    CHECK( test_tx_at(0)->len == 6u + 2u*8u + 8u*500u );
 
     /* 2000 + 2001 exceeds the 4000 payload cap: first flushes alone, second
      * rides the next bundle and goes out as a plain single */
@@ -136,8 +136,8 @@ void t_edge_bundle_exact_fit( void ){
     CHECK( test_tx_count() == 1 );
     run_ticks(1, 5);
     CHECK( test_tx_count() == 2 );
-    CHECK( test_tx_at(0)->len == 2000 );
-    CHECK( test_tx_at(1)->len == 2001 );
+    CHECK( test_tx_at(0)->len == 6u + 2u + 2000u );
+    CHECK( test_tx_at(1)->len == 6u + 2u + 2001u );
 }
 
 void t_edge_seq_rollover( void ){
@@ -254,7 +254,7 @@ void t_edge_fid_zero_and_ack_storm( void ){
 
     fill_payload(f, sizeof(f), 1);
     CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
-    fid = fid_of(f, sizeof(f));
+    fid = wire_fid_of(f, sizeof(f));
 
     rx_ack_frame(PEER_A, ack, build_legacy_ack(ack, EVM_M10, 0));
     halow_ack_stats_get(&st);
@@ -332,7 +332,7 @@ void t_edge_staging_timeout( void ){
     CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
     run_ticks(1, 5);
     CHECK( test_tx_count() == 1 );
-    fid1 = fid_of(f, sizeof(f));
+    fid1 = wire_fid_of(f, sizeof(f));
 
     fill_payload(f, sizeof(f), 2);
     CHECK( halow_ack_tx(f, sizeof(f), PEER_A) == 0 );
@@ -401,12 +401,16 @@ void t_edge_env_bundle_nsub_zero( void ){
     halow_ack_stats_get(&st);
     CHECK( st.rx_env_unk == 1 );
 
-    CHECK( rx_frame(PEER_B, nsub0, sizeof(nsub0), 0) );
+    /* nsub=0 with trailing garbage: the walk (off==len) fails, so the
+ * frame is consumed as malformed -- never counted as a received bundle
+ * and its seq is not recorded (a valid retransmission stays deliverable) */
+    CHECK( !rx_frame(PEER_B, nsub0, sizeof(nsub0), 0) );
     halow_ack_stats_get(&st);
-    CHECK( st.env_rx_bundles == 1 );
+    CHECK( st.rx_env_unk == 2 );
+    CHECK( st.env_rx_bundles == 0 );
 }
 
-void t_edge_stale_reheard_compat_reset( void ){
+void t_edge_stale_reheard_mcs_reset( void ){
     halow_ack_config_t cfg;
     halow_ack_peer_stats_t ps;
     uint8_t data[16];
@@ -418,14 +422,12 @@ void t_edge_stale_reheard_compat_reset( void ){
     env_peer_ready(PEER_D);
 
     rx_ack_frame(PEER_D, ack, build_legacy_ack(ack, EVM_M10, 0));
-    CHECK( halow_ack_peer_stats_by_mac(PEER_D, &ps) && ps.compat == 2 );
 
     test_advance_ms(61000);
     fill_payload(data, sizeof(data), 0x50);
     CHECK( rx_frame(PEER_D, data, sizeof(data), 0) );
 
     CHECK( halow_ack_peer_stats_by_mac(PEER_D, &ps) );
-    CHECK( ps.compat == 1 );
     CHECK( ps.tx_mcs == 7 );
 }
 
@@ -493,7 +495,6 @@ void t_edge_rapid_reconfig( void ){
             cfg_base(&cfg);
             cfg.window  = ( (i / 10) % 2 ) ? 16u : 1u;
             cfg.agg     = ( (i / 10) % 2 );
-            cfg.env     = ( (i / 10) % 2 );
             cfg.timeout_ms = ( (i / 10) % 2 ) ? 200u : 20u;
             halow_ack_config_apply(&cfg);
         }
@@ -501,7 +502,7 @@ void t_edge_rapid_reconfig( void ){
         fill_payload(f, sizeof(f), (uint8_t)i);
         CHECK( halow_ack_tx(f, sizeof(f), m) == 0 );
         run_ticks(2, 5);
-        fr_push(&ring, m, fid_of(f, sizeof(f)));
+        fr_push(&ring, m, wire_fid_of(f, sizeof(f)));
         fr_ack_all(&ring);
     }
 

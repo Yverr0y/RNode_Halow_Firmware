@@ -147,6 +147,32 @@ void ack_fid( const uint8_t *mac, uint16_t fid ){
     rx_ack_frame(mac, ack, build_legacy_ack(ack, EVM_M10, fid));
 }
 
+uint16_t wire_fid_of( const uint8_t *p, uint16_t len ){
+    /* every tracked frame rides a seq'd env bundle now: find the captured
+     * bundle whose subframe IS (p,len) and return the bundle's wire fid */
+    for( int i = test_tx_count() - 1; i >= 0; i-- ){
+        const test_tx_cap_t *t = test_tx_at(i);
+        if( t == NULL ) continue;              /* ring caps at TEST_TX_CAP_N */
+        /* plain-tracked frame: the payload IS the wire frame */
+        if( t->len == len && memcmp(t->buf, p, len) == 0 ){
+            return (uint16_t)(fnv1a(t->buf, t->len) & 0xFFFFu);
+        }
+        if( t->len < HALOW_ENV_BUNDLE_HDR + 2u ) continue;
+        if( t->buf[0] != HALOW_ENV_MAGIC0 || t->buf[1] != HALOW_ENV_MAGIC1 ) continue;
+        uint8_t nsub = t->buf[5];
+        uint32_t o = HALOW_ENV_BUNDLE_HDR;
+        for( uint32_t k = 0u; k < nsub && o + 2u <= t->len; k++ ){
+            uint16_t sl = (uint16_t)((uint16_t)t->buf[o] | ((uint16_t)t->buf[o + 1u] << 8));
+            o += 2u;
+            if( o + sl <= t->len && sl == len && memcmp(&t->buf[o], p, len) == 0 ){
+                return (uint16_t)(fnv1a(t->buf, t->len) & 0xFFFFu);
+            }
+            o += sl;
+        }
+    }
+    return 0u;
+}
+
 uint16_t fid_of( const uint8_t *p, uint16_t len ){
     return (uint16_t)(fnv1a(p, len) & 0xFFFFu);
 }

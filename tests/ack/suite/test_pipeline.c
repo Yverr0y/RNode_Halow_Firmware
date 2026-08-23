@@ -132,7 +132,7 @@ void t_fp_single_broadcast_learn( void ){
     fp_idle();
     CHECK( test_tx_count() == 1 );
     CHECK( memcmp(test_tx_at(0)->mac, PEER_A, 6) == 0 );
-    CHECK( test_tx_at(0)->len == plen );
+    CHECK( test_tx_at(0)->len == 6u + 2u + plen );   /* solo env bundle */
 }
 
 void t_fp_stream_framing_edges( void ){
@@ -267,8 +267,8 @@ void t_fp_bundle_glue( void ){
         const uint8_t *subs[8];
         uint16_t lens[8];
         const test_tx_cap_t *t = test_tx_at(0);
-        CHECK( t->buf[0] == 0xA5 && t->buf[1] == 0xAD && t->buf[2] == 8 );
-        CHECK( t->len == 3u + 2u*8u + 8u*500u );
+        CHECK( t->buf[0] == 0xA5 && t->buf[1] == 0x5A && t->buf[5] == 8 );
+        CHECK( t->len == 6u + 2u*8u + 8u*500u );
         int ns = wire_subs(t, subs, lens);
         CHECK( ns == 8 );
         for( int i = 0; i < ns; i++ ){
@@ -335,7 +335,7 @@ void t_fp_partial_bundle_on_idle( void ){
         const uint8_t *subs[8];
         uint16_t lens[8];
         const test_tx_cap_t *t = test_tx_at(0);
-        CHECK( t->buf[2] == 3 );
+        CHECK( t->buf[5] == 3 );
         int ns = wire_subs(t, subs, lens);
         CHECK( ns == 3 );
         for( int i = 0; i < ns; i++ ){
@@ -386,15 +386,15 @@ void t_fp_two_x_2000_bundle( void ){
         const uint8_t *subs[8];
         uint16_t lens[8];
         const test_tx_cap_t *t = test_tx_at(0);
-        CHECK( t->buf[0] == 0xA5 && t->buf[1] == 0xAD && t->buf[2] == 2 );
-        CHECK( t->len == 3u + 4u + 2u*plen[0] );
-        CHECK( t->len == 4007 );
+        CHECK( t->buf[0] == 0xA5 && t->buf[1] == 0x5A && t->buf[5] == 2 );
+        CHECK( t->len == 6u + 4u + 2u*plen[0] );
+        CHECK( t->len == 4010 );
         CHECK( wire_subs(t, subs, lens) == 2 );
         CHECK( lens[0] == plen[0] && memcmp(subs[0], pkt[0], plen[0]) == 0 );
         CHECK( lens[1] == plen[1] && memcmp(subs[1], pkt[1], plen[1]) == 0 );
         t = test_tx_at(1);
-        CHECK( t->len == plen[2] );
-        CHECK( memcmp(t->buf, pkt[2], plen[2]) == 0 );
+        CHECK( t->len == 6u + 2u + plen[2] );
+        CHECK( memcmp(&t->buf[8], pkt[2], plen[2]) == 0 );
     }
 }
 
@@ -509,8 +509,8 @@ void t_fp_heap_fail_throttle( void ){
     CHECK( rns_stream_decoder_retry_held(&g_dec, NULL) == 0 );
     fp_idle();
     CHECK( test_tx_count() == 1 );
-    CHECK( test_tx_at(0)->len == plen );
-    CHECK( memcmp(test_tx_at(0)->buf, pkt, plen) == 0 );
+    CHECK( test_tx_at(0)->len == 6u + 2u + plen );
+    CHECK( memcmp(&test_tx_at(0)->buf[8], pkt, plen) == 0 );
 }
 
 void t_fp_roundtrip_soak( void ){

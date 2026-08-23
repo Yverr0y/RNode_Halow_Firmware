@@ -60,6 +60,7 @@ void fr_push( fid_ring_t *r, const uint8_t *mac, uint16_t fid );
 void fr_ack_all( const fid_ring_t *r );
 void ack_fid( const uint8_t *mac, uint16_t fid );
 uint16_t fid_of( const uint8_t *p, uint16_t len );
+uint16_t wire_fid_of( const uint8_t *p, uint16_t len );
 void env_peer_ready( const uint8_t *mac );
 extern rns_stream_decoder_t g_dec;
 int32_t fp_frame_cb( uint8_t *payload, uint16_t len, void *user );

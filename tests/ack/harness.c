@@ -104,8 +104,12 @@ static int g_txn;
 
 void test_tx_reset(void){ g_txn = 0; memset(&g_tx_last, 0, sizeof(g_tx_last)); }
 int test_tx_count(void){ return g_txn; }
+/* circular capture: the newest TEST_TX_CAP_N frames are addressable by
+ * absolute index; older ones are evicted (NULL) */
 const test_tx_cap_t *test_tx_at(int i){
-    return (i >= 0 && i < g_txn && i < TEST_TX_CAP_N) ? &g_tx[i] : NULL;
+    if( i < 0 || i >= g_txn ) return NULL;
+    if( i < g_txn - TEST_TX_CAP_N ) return NULL;
+    return &g_tx[i % TEST_TX_CAP_N];
 }
 const test_tx_cap_t *test_tx_last(void){ return &g_tx_last; }
 
@@ -119,11 +123,12 @@ static void tx_capture(const uint8_t *buf, uint16_t len, const uint8_t mac[6], u
     memset(g_tx_last.buf, 0, sizeof(g_tx_last.buf));
     if( len <= TEST_TX_CAP_LEN ) memcpy(g_tx_last.buf, buf, len);
 
-    if( g_txn < TEST_TX_CAP_N && len <= TEST_TX_CAP_LEN ){
-        memcpy(g_tx[g_txn].buf, buf, len);
-        g_tx[g_txn].len = len;
-        memcpy(g_tx[g_txn].mac, mac, 6);
-        g_tx[g_txn].mcs = mcs;
+    if( len <= TEST_TX_CAP_LEN ){
+        int slot = g_txn % TEST_TX_CAP_N;
+        memcpy(g_tx[slot].buf, buf, len);
+        g_tx[slot].len = len;
+        memcpy(g_tx[slot].mac, mac, 6);
+        g_tx[slot].mcs = mcs;
     }
     g_txn++;
 }
