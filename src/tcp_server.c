@@ -1,6 +1,8 @@
+#include "sys_config.h"
+#define LOG_LOCAL_LEVEL LOG_LEVEL_TCP_SERVER
+
 #include "tcp_server.h"
 
-#include "sys_config.h"
 #include "lwip/tcp.h"
 #include "lwip/tcpip.h"
 #include "configdb.h"
@@ -9,17 +11,16 @@
 #include "lwip/netbuf.h"
 #include "lwip/api.h"
 #include "lib/lwrb/lwrb.h"
+#include "lib/logc/log.h"
+#include "net_ip.h"
+#include "halow_ack.h"
+#include "halow.h"                 /* halow_config_t etc. */
+extern halow_tx_dbg_t g_tx_dbg;    /* rf_tcp_dropped counter (halow.c) */
+
 #include <string.h>
 
-//#define TCP_SERVER_DEBUG
-
-#define TCP_SERVER_RF_TO_TCP_BUFF_COUNT     8
-
-#ifdef TCP_SERVER_DEBUG
-#define tcps_debug(fmt, ...)  os_printf("[TCPS] " fmt "\r\n", ##__VA_ARGS__)
-#else
-#define tcps_debug(fmt, ...)  do { } while (0)
-#endif
+#define TCP_SERVER_RF_TO_TCP_BUFF_COUNT             (32)
+#define TCP_SERVER_SEND_STALL_LIMIT_MS              (10000)
 
 #ifndef TCP_SERVER_CONFIG_PREFIX
 #define TCP_SERVER_CONFIG_PREFIX                    CONFIGDB_ADD_MODULE("tcps")
@@ -39,24 +40,62 @@ struct rb_tx_package{
 static tcp_server_config_t g_cfg;
 static tcp_server_rx_cb_t g_rx_cb;
 static lwrb_t g_tx_rb;
-static struct rb_tx_package* g_tx_rb_buff[TCP_SERVER_RF_TO_TCP_BUFF_COUNT];
+static uint8_t g_tx_rb_buff[TCP_SERVER_RF_TO_TCP_BUFF_COUNT * sizeof(struct rb_tx_package)];
 static struct os_mutex g_tx_rb_mutex;
 
 static struct os_task g_tcps_rx_task;
 static struct os_mutex g_clinet_mutex;
 static struct netconn *g_client_nc;
 
+static inline void tcp_server_cfg_log_trace( const char *tag, const tcp_server_config_t *cfg ){
+    char ipbuf[16];
+    char maskbuf[16];
+
+    if( cfg == NULL ){
+        return;
+    }
+
+    ip4addr_ntoa_r(&cfg->whitelist_ip, ipbuf, sizeof(ipbuf));
+    ip4addr_ntoa_r(&cfg->whitelist_mask, maskbuf, sizeof(maskbuf));
+
+    log_trace("%s en=%d port=%u wip=%s wmask=%s",
+              tag ? tag : "CFG",
+              cfg->enabled ? 1 : 0,
+              (unsigned)cfg->port,
+              ipbuf,
+              maskbuf);
+}
+
+static inline void tcp_server_cfg_log_debug( const char *tag, const tcp_server_config_t *cfg ){
+    char ipbuf[16];
+    char maskbuf[16];
+
+    if( cfg == NULL ){
+        return;
+    }
+
+    ip4addr_ntoa_r(&cfg->whitelist_ip, ipbuf, sizeof(ipbuf));
+    ip4addr_ntoa_r(&cfg->whitelist_mask, maskbuf, sizeof(maskbuf));
+
+    log_debug("%s en=%d port=%u wip=%s wmask=%s",
+              tag ? tag : "CFG",
+              cfg->enabled ? 1 : 0,
+              (unsigned)cfg->port,
+              ipbuf,
+              maskbuf);
+}
+
 static bool tcp_server_ip_allowed( const ip4_addr_t *addr ){
     uint32_t ip;
     uint32_t wl_ip;
     uint32_t wl_mask;
 
-    if (addr == NULL) {
+    if( addr == NULL ){
         return false;
     }
 
     wl_mask = ip4_addr_get_u32(&g_cfg.whitelist_mask);
-    if (wl_mask == 0) {
+    if( wl_mask == 0 ){
         return true;
     }
 
@@ -66,13 +105,13 @@ static bool tcp_server_ip_allowed( const ip4_addr_t *addr ){
     return ((ip & wl_mask) == (wl_ip & wl_mask));
 }
 
-void tcp_server_config_load(tcp_server_config_t *cfg){
+void tcp_server_config_load( tcp_server_config_t *cfg ){
     int8_t enabled;
     int16_t port;
     int32_t ip;
     int32_t mask;
 
-    if (cfg == NULL) {
+    if( cfg == NULL ){
         return;
     }
 
@@ -81,27 +120,29 @@ void tcp_server_config_load(tcp_server_config_t *cfg){
     cfg->whitelist_ip.addr = (uint32_t)TCP_SERVER_CONFIG_WHITELIST_IP_DEF;
     cfg->whitelist_mask.addr = (uint32_t)TCP_SERVER_CONFIG_WHITELIST_MASK_DEF;
 
-    if (configdb_get_i8(TCP_SERVER_CONFIG_ENABLED_NAME, &enabled) == 0) {
+    if( configdb_get_i8(TCP_SERVER_CONFIG_ENABLED_NAME, &enabled) == 0 ){
         cfg->enabled = enabled ? true : false;
     }
-    if (configdb_get_i16(TCP_SERVER_CONFIG_PORT_NAME, &port) == 0) {
+    if( configdb_get_i16(TCP_SERVER_CONFIG_PORT_NAME, &port) == 0 ){
         cfg->port = (uint16_t)port;
     }
-    if (configdb_get_i32(TCP_SERVER_CONFIG_WHITELIST_IP_NAME, &ip) == 0) {
+    if( configdb_get_i32(TCP_SERVER_CONFIG_WHITELIST_IP_NAME, &ip) == 0 ){
         cfg->whitelist_ip.addr = (uint32_t)ip;
     }
-    if (configdb_get_i32(TCP_SERVER_CONFIG_WHITELIST_MASK_NAME, &mask) == 0) {
+    if( configdb_get_i32(TCP_SERVER_CONFIG_WHITELIST_MASK_NAME, &mask) == 0 ){
         cfg->whitelist_mask.addr = (uint32_t)mask;
     }
+
+    tcp_server_cfg_log_trace("LOAD", cfg);
 }
 
-void tcp_server_config_save(const tcp_server_config_t *cfg){
+void tcp_server_config_save( const tcp_server_config_t *cfg ){
     int8_t enabled;
     int16_t port;
     int32_t ip;
     int32_t mask;
 
-    if (cfg == NULL) {
+    if( cfg == NULL ){
         return;
     }
 
@@ -116,32 +157,36 @@ void tcp_server_config_save(const tcp_server_config_t *cfg){
     configdb_set_i32(TCP_SERVER_CONFIG_WHITELIST_MASK_NAME, &mask);
 
     memcpy(&g_cfg, cfg, sizeof(tcp_server_config_t));
+    tcp_server_cfg_log_debug("SAVE", cfg);
 }
 
-void tcp_server_config_apply(const tcp_server_config_t *cfg){
-    if (cfg == NULL) {
+void tcp_server_config_apply( const tcp_server_config_t *cfg ){
+    if( cfg == NULL ){
         return;
     }
 
     memcpy(&g_cfg, cfg, sizeof(tcp_server_config_t));
+    tcp_server_cfg_log_debug("APPLY", cfg);
 }
 
-bool tcp_server_get_client_info(ip4_addr_t *addr, uint16_t *port){
+bool tcp_server_get_client_info( ip4_addr_t *addr, uint16_t *port ){
     bool ok = false;
 
-    if (os_mutex_lock(&g_clinet_mutex, 0) != 0){
+    if( os_mutex_lock(&g_clinet_mutex, 0) != 0 ){
         return false;
     }
 
-    if (g_client_nc != NULL &&
-        g_client_nc->pcb.tcp != NULL) {
+    /* Snapshot the pcb pointer ONCE: err_tcp (tcpip thread) can NULL it at
+     * any instant; re-reading it between check and use could fault. */
+    struct tcp_pcb *pcb = ( g_client_nc != NULL ) ? g_client_nc->pcb.tcp : NULL;
+    if( pcb != NULL ){
 
-        if (addr != NULL) {
-            ip4_addr_copy(*addr, g_client_nc->pcb.tcp->remote_ip);
+        if( addr != NULL ){
+            ip4_addr_copy(*addr, pcb->remote_ip);
         }
 
-        if (port != NULL) {
-            *port = g_client_nc->pcb.tcp->remote_port;
+        if( port != NULL ){
+            *port = pcb->remote_port;
         }
 
         ok = true;
@@ -151,24 +196,91 @@ bool tcp_server_get_client_info(ip4_addr_t *addr, uint16_t *port){
     return ok;
 }
 
+static void tcp_server_tx_queue_clear( void ){
+    struct rb_tx_package pkg;
+
+    os_mutex_lock(&g_tx_rb_mutex, OS_MUTEX_WAIT_FOREVER);
+
+    while( lwrb_read(&g_tx_rb, &pkg, sizeof(pkg)) == sizeof(pkg) ){
+        if( pkg.data != NULL ){
+            os_free(pkg.data);
+        }
+    }
+
+    lwrb_reset(&g_tx_rb);
+    os_mutex_unlock(&g_tx_rb_mutex);
+
+    log_debug("tx queue cleared");
+}
+
+/* Feed the netbuf's bytes to the TX decoder starting at (*chunk, *ofs).
+ * Returns 0 when the whole netbuf was consumed, or the g_rx_cb status:
+ * HALOW_ACK_TX_THROTTLE stops at the exact resume position (cursor
+ * updated); other negatives own a retry slot already -- fully consumed. */
+static int32_t tcp_server_feed_netbuf( struct netbuf *nb, uint16_t *chunk, uint16_t *ofs ){
+    netbuf_first(nb);
+    uint16_t ci = 0u;
+    for( ;; ){
+        uint8_t *data;
+        uint16_t dlen;
+        netbuf_data(nb, (void **)&data, &dlen);
+        if( (ci > *chunk || (ci == *chunk && *ofs < dlen)) && g_rx_cb != NULL ){
+            uint16_t consumed = 0u;
+            int32_t r = g_rx_cb(data + *ofs, (uint16_t)(dlen - *ofs), &consumed);
+            if( r == HALOW_ACK_TX_THROTTLE ){
+                uint32_t adv = consumed;
+                if( adv > (uint32_t)(dlen - *ofs) ) adv = (uint32_t)(dlen - *ofs);
+                *ofs = (uint16_t)(*ofs + adv);
+                if( *ofs >= dlen ){ *chunk = (uint16_t)(ci + 1u); *ofs = 0u; }
+                return r;
+            }
+            *ofs = 0u;
+            *chunk = (uint16_t)(ci + 1u);
+        }
+        if( netbuf_next(nb) < 0 ) break;
+        ci++;
+    }
+    return 0;
+}
+
 static void tcp_client_loop( struct netconn *client ){
     err_t err;
     struct netbuf *nb = NULL;
+    /* THROTTLE = the RF/ACK TX path is saturated: skip netconn_recv so lwIP
+     * closes the TCP recv window and the sender paces itself, while still
+     * draining the RF->TCP ring every iteration. */
+    uint32_t tx_throttle_ms = 0u;
+#define TCP_SERVER_TX_THROTTLE_MS  5u
+    struct netbuf *held_nb = NULL;
+    uint16_t held_chunk = 0u, held_ofs = 0u;
 
-    while (1) {
-        if(!g_cfg.enabled){
+    /* This is the only context allowed to block on DMA budget (TX-complete
+     * refunds) instead of shedding frames: blocking here closes the lwIP
+     * recv window and paces the sender. */
+    halow_tx_may_block_set(true);
+
+    while( 1 ){
+        if( !g_cfg.enabled ){
             os_sleep_ms(3000);
             break;
         }
 
-        // Send if needed
-        os_mutex_lock(&g_tx_rb_mutex, OS_MUTEX_WAIT_FOREVER);
+        /* Pop ONE package under the mutex, write with the mutex RELEASED:
+         * holding it across the blocking write starved the producers. */
         struct rb_tx_package tx_package;
-        if(lwrb_read(&g_tx_rb, &tx_package, sizeof(tx_package)) == sizeof(tx_package)){
+
+        for( uint32_t burst = 0u; burst < 4u; burst++ ){
+            bool have_pkg = false;
+            os_mutex_lock(&g_tx_rb_mutex, OS_MUTEX_WAIT_FOREVER);
+            if( lwrb_read(&g_tx_rb, &tx_package, sizeof(tx_package)) == sizeof(tx_package) ){
+                have_pkg = true;
+            }
+            os_mutex_unlock(&g_tx_rb_mutex);
+            if( !have_pkg ) break;
             size_t offset = 0;
             uint32_t wb_cnt = 0;
 
-            while (offset < tx_package.len) {
+            while( offset < tx_package.len ){
                 size_t written = 0;
                 err = netconn_write_partly(
                     client,
@@ -178,142 +290,238 @@ static void tcp_client_loop( struct netconn *client ){
                     &written
                 );
 
-                if (written > 0) {
+                if( written > 0 ){
                     offset += written;
                     wb_cnt = 0;
                 }
 
-                if (err == ERR_OK) {
+                if( err == ERR_OK ){
                     continue;
                 }
 
-                if (err == ERR_WOULDBLOCK) {
-                    if (++wb_cnt > 1000) {
-                        tcps_debug("send stuck -> close");
+                if( err == ERR_WOULDBLOCK ){
+                    if( ++wb_cnt > TCP_SERVER_SEND_STALL_LIMIT_MS ){
+                        log_warn("send stuck -> close");
                         break;
                     }
                     os_sleep_ms(1);
                     continue;
                 }
 
-                tcps_debug("send failed err=%d offset=%u len=%u",
-                        (int)err,
-                        (unsigned)offset,
-                        (unsigned)tx_package.len);
+                log_warn("send failed err=%d offset=%u len=%u",
+                         (int)err,
+                         (unsigned)offset,
+                         (unsigned)tx_package.len);
                 break;
             }
 
             os_free(tx_package.data);
 
-            if (offset < tx_package.len) {
-                os_mutex_unlock(&g_tx_rb_mutex);
+            if( offset < tx_package.len ){
+                /* Partial/failed host write: the undelivered tail is lost. */
+                g_tx_dbg.rf_tcp_dropped++;
                 break;
             }
         }
-        os_mutex_unlock(&g_tx_rb_mutex);
-        
-        // Receive if needed
-        err = netconn_recv(client, &nb);
 
-        if(err == ERR_WOULDBLOCK) {
-            os_sleep_ms(1); // Not very efficient, but easy
+        /* TX backpressure: parked netbufs wait in a bounded FIFO. Keep
+         * draining netconn_recv while the FIFO has room or lwIP aborts with
+         * ERR_ABRT on recvmbox overflow; a full FIFO just closes the recv
+         * window and the sender parks in its own kernel buffers. */
+        if( tx_throttle_ms > 0u ){
+            tx_throttle_ms--;
+            os_sleep_ms(1);
             continue;
         }
 
-        if(err != ERR_OK || nb == NULL) {
-            tcps_debug("recv end err=%d nb=%p", (int)err, nb);
+        g_tx_dbg.tcps_held = (held_nb != NULL) ? 1u : 0u;
+        if( held_nb != NULL ){
+            uint16_t chunk = held_chunk, ofs = held_ofs;
+            int32_t r = tcp_server_feed_netbuf(held_nb, &chunk, &ofs);
+            if( r == HALOW_ACK_TX_THROTTLE ){
+                held_chunk = chunk; held_ofs = ofs;
+                os_sleep_ms(1);
+                continue;
+            }
+            if( r < 0 ) tx_throttle_ms = TCP_SERVER_TX_THROTTLE_MS;
+            netbuf_delete(held_nb);
+            held_nb = NULL;
+            continue;
+        }
+
+        if( !halow_ack_tx_ready() ){
+            extern int32_t rns_tcp_retry_held(void);
+            (void)rns_tcp_retry_held();
+            os_sleep_ms(2);
+            continue;
+        }
+
+        g_tx_dbg.tcps_beat++;
+        err = netconn_recv(client, &nb);
+
+        if( err == ERR_WOULDBLOCK ){
+            /* lwIP has nothing more buffered: whatever the ACK layer is
+             * staging must go out NOW, incomplete -- waiting for a fuller
+             * frame would add latency for nothing. */
+            halow_ack_flush();
+            os_sleep_ms(1);
+            continue;
+        }
+
+        if( err != ERR_OK || nb == NULL ){
+            g_tx_dbg.tcps_last_err = (int32_t)err;
+            log_warn("recv end err=%d nb=%p", (int)err, nb);
             break;
         }
-        
-        netbuf_first(nb);
-        do{
-            uint8_t* data;
-            uint16_t data_len;
-            
-            netbuf_data(nb, (void**)&data, &data_len);
-            if(g_rx_cb != NULL){
-                g_rx_cb(data, data_len);
+        g_tx_dbg.tcps_recv_ok++;
+
+        {
+            uint16_t chunk = 0u, ofs = 0u;
+            int32_t r = tcp_server_feed_netbuf(nb, &chunk, &ofs);
+            if( r == HALOW_ACK_TX_THROTTLE ){
+                held_nb = nb; held_chunk = chunk; held_ofs = ofs;
+                nb = NULL;
+                continue;
             }
-        }while (netbuf_next(nb) >= 0);
+            if( r < 0 ) tx_throttle_ms = TCP_SERVER_TX_THROTTLE_MS;
+        }
 
         netbuf_delete(nb);
         nb = NULL;
     }
 
-    if (nb != NULL) {
+    halow_tx_may_block_set(false);
+
+    if( held_nb != NULL ){
+        netbuf_delete(held_nb);
+    }
+
+    if( nb != NULL ){
         netbuf_delete(nb);
     }
+}
+
+/* Runs in the tcpip thread via tcpip_callback(): the only context allowed to
+ * touch pcb fields. If the connection died before the callback ran,
+ * err_tcp has already NULLed pcb.tcp -- skip. */
+static void tcp_server_cfg_keepalive( void *arg ){
+    struct netconn *nc = (struct netconn *)arg;
+    if( nc == NULL || nc->pcb.tcp == NULL ) return;
+    tcp_nagle_disable(nc->pcb.tcp);
+    nc->pcb.tcp->so_options |= SOF_KEEPALIVE;
+    nc->pcb.tcp->keep_idle  = 5000;
+    nc->pcb.tcp->keep_intvl = 2000;
+    nc->pcb.tcp->keep_cnt   = 3;
 }
 
 static void tcp_server_task( void *arg ){
     struct netconn *listen = NULL;
     err_t err;
-    
+
     (void)arg;
 
-    tcps_debug("server start");
+    log_info("server start");
 
     listen = netconn_new(NETCONN_TCP);
-    netconn_bind(listen, IP_ADDR_ANY, g_cfg.port);
-    netconn_listen_with_backlog(listen, 0);
+    if( listen == NULL ){
+        log_error("netconn_new failed");
+        return;
+    }
 
-    tcps_debug("listening on port %d", g_cfg.port);
+    err = netconn_bind(listen, IP_ADDR_ANY, g_cfg.port);
+    if( err != ERR_OK ){
+        log_error("bind failed err=%d port=%u", (int)err, (unsigned)g_cfg.port);
+        netconn_delete(listen);
+        return;
+    }
 
-    while (1) {
-        if(!g_cfg.enabled){
+    err = netconn_listen_with_backlog(listen, 0);
+    if( err != ERR_OK ){
+        log_error("listen failed err=%d port=%u", (int)err, (unsigned)g_cfg.port);
+        netconn_delete(listen);
+        return;
+    }
+
+    log_info("listening on port %u", (unsigned)g_cfg.port);
+
+    while( 1 ){
+        if( !g_cfg.enabled ){
             os_sleep_ms(3000);
             continue;
         }
+
         struct netconn *client = NULL;
         err = netconn_accept(listen, &client);
-        tcps_debug("accept ret err=%d client=%p", (int)err, client);
+        log_trace("accept err=%d client=%p", (int)err, client);
 
-        if (err != ERR_OK) {
-            tcps_debug("accept failed err=%d client=%p", (int)err, client);
-            if (client != NULL) {
+        if( err != ERR_OK ){
+            log_warn("accept failed err=%d client=%p", (int)err, client);
+            if( client != NULL ){
                 netconn_close(client);
-                tcps_debug("1DELETE nc=%p", client);
                 netconn_delete(client);
             }
             continue;
         }
 
-        ip4_addr_t client_ip = client->pcb.tcp->remote_ip;
-        if (!tcp_server_ip_allowed(&client_ip)) {
-            tcps_debug("client reject ip=%s", ip4addr_ntoa(&client_ip));
-            netconn_close(client);
-            tcps_debug("2DELETE nc=%p", client);
+        /* NEVER touch client->pcb.* directly here: err_tcp() can NULL/free
+         * the pcb while the netconn still sits in the accept mbox. Use the
+         * netconn-level setters, serialized in the tcpip thread. */
+        struct tcp_pcb *cpcb = client->pcb.tcp;   /* snapshot once */
+        if( cpcb == NULL ){
+            log_warn("accept: null pcb, drop client");
             netconn_delete(client);
             continue;
         }
 
-        tcps_debug("client accepted nc=%p", client);
+        ip4_addr_t client_ip = cpcb->remote_ip;
+        if( !tcp_server_ip_allowed(&client_ip) ){
+            log_warn("client reject ip=%s", ip4addr_ntoa(&client_ip));
+            netconn_close(client);
+            netconn_delete(client);
+            continue;
+        }
+
+        log_info("client accepted ip=%s port=%u nc=%p",
+                 ip4addr_ntoa(&client_ip),
+                 (unsigned)cpcb->remote_port,
+                 client);
+
+        tcp_server_tx_queue_clear();
+
+        {
+            extern void rns_tcp_session_reset(void);
+            rns_tcp_session_reset();
+        }
+
+        /* Keepalive/nagle config runs in the tcpip thread (only it may touch
+         * pcb fields; err_tcp can free the pcb at any moment). */
+        tcpip_callback(tcp_server_cfg_keepalive, client);
 
         os_mutex_lock(&g_clinet_mutex, OS_MUTEX_WAIT_FOREVER);
-        //netconn_set_recvtimeout(client, 5000);
         netconn_set_sendtimeout(client, 1000);
         netconn_set_nonblocking(client, 1);
-        tcp_nagle_disable(client->pcb.tcp);
-        client->pcb.tcp->so_options |= SOF_KEEPALIVE;
-        client->pcb.tcp->keep_idle  = 5000;
-        client->pcb.tcp->keep_intvl = 2000;
-        client->pcb.tcp->keep_cnt   = 3;
         g_client_nc = client;
         os_mutex_unlock(&g_clinet_mutex);
 
         tcp_client_loop(client);
 
-        tcps_debug("closing client nc=%p", client);
+        log_info("closing client nc=%p", client);
         os_mutex_lock(&g_clinet_mutex, OS_MUTEX_WAIT_FOREVER);
         g_client_nc = NULL;
-        netconn_close(client);
-        tcps_debug("3DELETE nc=%p", client);
-        netconn_delete(client);
         os_mutex_unlock(&g_clinet_mutex);
+        tcp_server_tx_queue_clear();
+        
+        netconn_close(client);
+        netconn_delete(client);
+        halow_tx_may_block_set(false);
+
+        /* Bound the accept/close cycle rate: reconnect storms spin this loop
+         * at full speed inside the pcb/netconn lifetime race window. */
+        os_sleep_ms(50);
     }
 }
 
-int32_t tcp_server_init(tcp_server_rx_cb_t cb){
+void tcp_server_init( tcp_server_rx_cb_t cb ){
     g_rx_cb = cb;
     lwrb_init(&g_tx_rb, g_tx_rb_buff, sizeof(g_tx_rb_buff));
     os_mutex_init(&g_clinet_mutex);
@@ -321,43 +529,79 @@ int32_t tcp_server_init(tcp_server_rx_cb_t cb){
 
     tcp_server_config_load(&g_cfg);
     tcp_server_config_save(&g_cfg);
-    
-    (void)os_task_init((const uint8 *)"tcps", &g_tcps_rx_task, tcp_server_task, 0);
-    (void)os_task_set_stacksize(&g_tcps_rx_task, TCP_SERVER_TASK_STACK);
-    (void)os_task_set_priority(&g_tcps_rx_task, TCP_SERVER_TASK_PRIO);
-    (void)os_task_run(&g_tcps_rx_task);
+
+    os_task_init((const uint8 *)"tcps", &g_tcps_rx_task, tcp_server_task, 0);
+    os_task_set_stacksize(&g_tcps_rx_task, TCP_SERVER_TASK_STACK);
+    os_task_set_priority(&g_tcps_rx_task, TCP_SERVER_TASK_PRIO);
+    os_task_run(&g_tcps_rx_task);
+    log_info("tcp server init ok");
+}
+
+/* mutex HELD: descriptor push, buffer ownership transfers to the ring */
+static int32_t tcp_server_push_owned_locked( uint8_t *os_buf, uint32_t len ){
+    struct rb_tx_package pkg;
+    uint32_t writen;
+
+    /* Check free space INSIDE the mutex: a TOCTOU here could let lwrb_write
+     * do a PARTIAL write, leaving a torn rb_tx_package in the ring. */
+    if( lwrb_get_free(&g_tx_rb) < sizeof(pkg) ){
+        os_free(os_buf);
+        log_trace("send queue full");
+        return -1;
+    }
+
+    pkg.data = os_buf;
+    pkg.len = len;
+
+    writen = lwrb_write(&g_tx_rb, &pkg, sizeof(pkg));
+    if( writen != sizeof(pkg) ){
+        os_free(os_buf);
+        log_warn("send rb write failed wr=%u need=%u",
+                 (unsigned)writen,
+                 (unsigned)sizeof(pkg));
+        return -4;
+    }
 
     return 0;
 }
 
-int32_t tcp_server_send(const uint8_t *data, uint32_t len){
+/* Zero-copy: the ring takes ownership of os_buf (os_malloc'd). On success it
+ * is freed by the tcps task after netconn_write; on failure it is freed
+ * here. Either way the caller must not touch/free it afterwards. */
+int32_t tcp_server_send_owned( uint8_t *os_buf, uint32_t len ){
     int32_t res;
-    struct rb_tx_package pkg;
 
-    size_t free = lwrb_get_free(&g_tx_rb);
-    if (free < sizeof(pkg)) {
-        return -1;
-    }
-
-	pkg.data = os_malloc(len);
-    if(pkg.data == NULL){
+    if( os_buf == NULL ){
         return -2;
     }
-    
-    memcpy(pkg.data, data, len);
-    pkg.len = len;
+
     res = os_mutex_lock(&g_tx_rb_mutex, 0);
-    if(res != 0){
-        os_free(pkg.data);
+    if( res != 0 ){
+        os_free(os_buf);
         return -3;
     }
-    
-    uint32_t writen = lwrb_write(&g_tx_rb, &pkg, sizeof(pkg));
-    if(writen != sizeof(pkg)){
-        os_free(pkg.data);
-        os_mutex_unlock(&g_tx_rb_mutex);
-        return -4;
-    }
+    res = tcp_server_push_owned_locked(os_buf, len);
     os_mutex_unlock(&g_tx_rb_mutex);
-    return 0;
+    return res;
+}
+
+int32_t tcp_server_send( const uint8_t *data, uint32_t len ){
+    uint8_t *buf;
+    int32_t res;
+
+    if( data == NULL ){
+        return -2;
+    }
+    buf = os_malloc(len);
+    if( buf == NULL ){
+        log_warn("send malloc failed len=%u", (unsigned)len);
+        return -2;
+    }
+    memcpy(buf, data, len);
+    res = tcp_server_send_owned(buf, len);
+    if( res != 0 ){
+        /* send_owned freed the buffer on failure */
+        log_trace("send owned push failed res=%d", (int)res);
+    }
+    return res;
 }

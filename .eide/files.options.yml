@@ -16,5 +16,17 @@
 version: "2.1"
 options:
     Debug:
-        files: {}
+        files:
+            # hot TCP<->RF pipeline files: -O2 (appended after -Os, last wins)
+            'src/halow_ack.c': -O2
+            'src/halow_pkg_handler.c': -O2
+            'src/tcp_server.c': -O2
+            'src/rns/stream_parser.c': -O2
+        virtualPathFiles: {}
+    Release:
+        files:
+            'src/halow_ack.c': -O2
+            'src/halow_pkg_handler.c': -O2
+            'src/tcp_server.c': -O2
+            'src/rns/stream_parser.c': -O2
         virtualPathFiles: {}

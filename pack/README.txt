@@ -34,4 +34,4 @@
 В папке `pack` (где лежат `prepare_firmware.py` и `makecode.ini`):
 
 ```bat
-python prepare_firmware.py TXW8301-PHY.bin
+python prepare_firmware.py RNode_Halow_Firmware.bin

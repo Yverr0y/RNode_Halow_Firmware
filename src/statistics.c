@@ -1,45 +1,52 @@
+#include "sys_config.h"
+#define LOG_LOCAL_LEVEL LOG_LEVEL_STATISTICS
+
 #include "basic_include.h"
 #include "statistics.h"
 #include "halow_lbt.h"
+#include "halow.h"
+#include "lib/logc/log.h"
 #include <string.h>
 #include <time.h>
-
-#define STATISTICS_DEBUG
-
-#ifdef STATISTICS_DEBUG
-#define stat_debug(fmt, ...)  os_printf("[STAT] " fmt "\r\n", ##__VA_ARGS__)
-#else
-#define stat_debug(fmt, ...)  do { } while (0)
-#endif
 
 extern __bobj uint64 cpu_loading_tick;
 
 volatile statistics_radio_t g_stat_radio;
 
+static uint32_t s_rx_bytes_previous;
+static uint32_t s_tx_bytes_previous;
+static uint8_t  s_rx_idle_s, s_tx_idle_s;
+
 static struct os_task g_stat_task;
 
-void statistics_radio_register_rx_package(uint32_t len){
+void statistics_radio_register_rx_package( uint32_t len ) {
     g_stat_radio.rx_packets++;
     g_stat_radio.rx_bytes += len;
 }
 
-void statistics_radio_register_tx_package(uint32_t len){
+void statistics_radio_register_tx_package( uint32_t len ) {
     g_stat_radio.tx_packets++;
     g_stat_radio.tx_bytes += len;
 }
 
-statistics_radio_t statistics_radio_get(void){
+statistics_radio_t statistics_radio_get( void ) {
     return g_stat_radio;
 }
 
-void statistics_radio_reset(void){
+void statistics_radio_reset( void ) {
     g_stat_radio.rx_bytes = 0;
     g_stat_radio.tx_bytes = 0;
     g_stat_radio.rx_packets = 0;
     g_stat_radio.tx_packets = 0;
+    g_stat_radio.rx_bitps = 0;
+    g_stat_radio.tx_bitps = 0;
+    s_rx_bytes_previous = 0;
+    s_tx_bytes_previous = 0;
+    s_rx_idle_s = 0;
+    s_tx_idle_s = 0;
 }
 
-void statistics_cpu_load_get( char *return_str, uint32_t max_len ){
+void statistics_cpu_load_get( char *return_str, uint32_t max_len ) {
     struct os_task_info tsk_info[2];
     uint32 count;
     uint32 diff_tick;
@@ -75,7 +82,7 @@ void statistics_cpu_load_get( char *return_str, uint32_t max_len ){
     os_snprintf(return_str, max_len, "%u%%", cpu_pct);
 }
 
-void statistics_heap_usage_get( char *return_str, uint32_t max_len ){
+void statistics_heap_usage_get( char *return_str, uint32_t max_len ) {
     uint32_t total;
     uint32_t free;
     uint32_t used;
@@ -107,101 +114,130 @@ void statistics_heap_usage_get( char *return_str, uint32_t max_len ){
                 used_pct);
 }
 
-void statistics_uptime_get(char* return_str, uint32_t max_len){
+void statistics_uptime_get( char *return_str, uint32_t max_len ) {
     char tmp_str[32];
-    if(return_str == NULL){
+    struct timespec tm;
+    uint32_t time_s;
+    uint32_t time_m;
+    uint32_t time_h;
+    uint32_t time_d;
+
+    if (return_str == NULL) {
         return;
     }
+
     tmp_str[0] = '\0';
-    struct timespec tm;
+
     os_systime(&tm);
-    uint32_t time_s = tm.tv_sec;
-    uint32_t time_m = tm.tv_sec / 60;
-    uint32_t time_h = time_m / 60;
-    uint32_t time_d = time_h / 24;
+    time_s = tm.tv_sec;
+    time_m = tm.tv_sec / 60;
+    time_h = time_m / 60;
+    time_d = time_h / 24;
 
     time_s %= 60;
     time_m %= 60;
     time_h %= 24;
-    
-    if(time_d != 0){
-        snprintf(
-            tmp_str, 
-            sizeof(tmp_str), 
-            "%ud ", 
-            time_d
-        );
+
+    if (time_d != 0) {
+        snprintf(tmp_str,
+                 sizeof(tmp_str),
+                 "%ud ",
+                 time_d);
     }
 
-    if((time_h != 0) || (time_d != 0)){
-        snprintf(
-            tmp_str + strlen(tmp_str), 
-            sizeof(tmp_str) - strlen(tmp_str), 
-            "%uh ", 
-            time_h
-        );
-    }
-    
-    if((time_m != 0) || (time_h != 0) || (time_d != 0)){
-        snprintf(
-            tmp_str + strlen(tmp_str), 
-            sizeof(tmp_str) - strlen(tmp_str), 
-            "%um ", 
-            time_m
-        );
+    if ((time_h != 0) || (time_d != 0)) {
+        snprintf(tmp_str + strlen(tmp_str),
+                 sizeof(tmp_str) - strlen(tmp_str),
+                 "%uh ",
+                 time_h);
     }
 
-    snprintf(
-        tmp_str + strlen(tmp_str), 
-        sizeof(tmp_str) - strlen(tmp_str), 
-        "%us", 
-        time_s
-    );
+    if ((time_m != 0) || (time_h != 0) || (time_d != 0)) {
+        snprintf(tmp_str + strlen(tmp_str),
+                 sizeof(tmp_str) - strlen(tmp_str),
+                 "%um ",
+                 time_m);
+    }
+
+    snprintf(tmp_str + strlen(tmp_str),
+             sizeof(tmp_str) - strlen(tmp_str),
+             "%us",
+             time_s);
 
     strncpy(return_str, tmp_str, max_len);
 }
 
-static void statistics_task(void *arg){
+/* Per-second rate update, extracted from the task loop so tests can drive
+ * it deterministically. IIR: y = (3y + x)/4 over the last second's byte
+ * delta; decays progressively in silence; 10 idle seconds clamp to zero. */
+void statistics_radio_rate_tick( void ) {
+    uint32_t rx_bytes_now = g_stat_radio.rx_bytes;
+    uint32_t tx_bytes_now = g_stat_radio.tx_bytes;
+
+    uint32_t rx_delta = (rx_bytes_now >= s_rx_bytes_previous) ? (rx_bytes_now - s_rx_bytes_previous) : 0;
+    uint32_t tx_delta = (tx_bytes_now >= s_tx_bytes_previous) ? (tx_bytes_now - s_tx_bytes_previous) : 0;
+
+    g_stat_radio.rx_bitps = (g_stat_radio.rx_bitps * 3u + rx_delta * 8u) / 4u;
+    g_stat_radio.tx_bitps = (g_stat_radio.tx_bitps * 3u + tx_delta * 8u) / 4u;
+    if( rx_delta != 0u ) s_rx_idle_s = 0u;
+    else if( ++s_rx_idle_s >= 10u ) g_stat_radio.rx_bitps = 0u;
+    if( tx_delta != 0u ) s_tx_idle_s = 0u;
+    else if( ++s_tx_idle_s >= 10u ) g_stat_radio.tx_bitps = 0u;
+
+    s_rx_bytes_previous = rx_bytes_now;
+    s_tx_bytes_previous = tx_bytes_now;
+}
+
+static void statistics_task( void *arg ) {
     (void)arg;
-    static uint32_t rx_bytes_previous;
-    static uint32_t tx_bytes_previous;
-    while(1){
-        uint32_t rx_bytes_now = g_stat_radio.rx_bytes;
-        uint32_t tx_bytes_now = g_stat_radio.tx_bytes;
 
-        uint32_t rx_delta = rx_bytes_now - rx_bytes_previous;
-        uint32_t tx_delta = tx_bytes_now - tx_bytes_previous;
+    while(1) {
+        statistics_radio_rate_tick();
 
-        g_stat_radio.rx_bitps = rx_delta*8;
-        g_stat_radio.tx_bitps = tx_delta*8;
+        /* ACK-tick stall canary: the tick feeds the hardware watchdog, so a
+         * frozen tick resets the node silently. This task is independent of
+         * g_ack_mutex and can still log while the tick is stuck. */
+        {
+            static uint32_t last_tick_count;
+            static uint8_t  stalled_secs;
+            extern volatile uint32_t g_ack_tick_count;
+            uint32_t tc = g_ack_tick_count;
+            if( tc == last_tick_count ){
+                if( ++stalled_secs >= 3u ){
+                    log_warn("stat: ack tick STALLED %us (count=%u)",
+                             (unsigned)stalled_secs, (unsigned)tc);
+                }
+            }else{
+                if( stalled_secs >= 3u ){
+                    log_info("stat: ack tick recovered after %us stall",
+                             (unsigned)stalled_secs);
+                }
+                stalled_secs   = 0u;
+                last_tick_count = tc;
+            }
+        }
 
-        rx_bytes_previous = rx_bytes_now;
-        tx_bytes_previous = tx_bytes_now;
-        
         g_stat_radio.bkgnd_noise_dbm = halow_lbt_background_long_dbm_get();
         g_stat_radio.bkgnd_noise_dbm_now = halow_lbt_background_short_dbm_get();
         g_stat_radio.airtime = halow_lbt_airtime_get();
         g_stat_radio.ch_util = halow_lbt_ch_util_get();
+
+        /* Keep the TX-path MCS/BW cache warm from this low-stakes context:
+         * the TX hot path must never block on the flash mutexes (it feeds
+         * the hardware watchdog). */
+        halow_cfg_mcs_bw_refresh();
+
+        halow_gain_pilot_tick();
+
         os_sleep(1);
     }
 }
 
-int32_t statistics_init( void ){
-    int32_t ret;
+void statistics_init( void ) {
+    os_task_init((const uint8 *)"stat", &g_stat_task, statistics_task, 0);
+    os_task_set_stacksize(&g_stat_task, STATISTICS_TASK_STACK);
+    os_task_set_priority(&g_stat_task, STATISTICS_TASK_PRIO);
+    os_task_run(&g_stat_task);
 
-    ret = os_task_init((const uint8 *)"stat", &g_stat_task, statistics_task, 0);
-    stat_debug("os_task_init -> %d", (int)ret);
-    if (ret != 0) {
-        return ret;
-    }
-
-    ret = os_task_set_stacksize(&g_stat_task, STATISTICS_TASK_STACK);
-    stat_debug("os_task_set_stacksize -> %d", (int)ret);
-
-    ret = os_task_set_priority(&g_stat_task, STATISTICS_TASK_PRIO);
-    stat_debug("os_task_set_priority -> %d", (int)ret);
-
-    ret = os_task_run(&g_stat_task);
-    stat_debug("os_task_run -> %d", (int)ret);
-    return ret;
+    log_info("statistics init ok");
 }

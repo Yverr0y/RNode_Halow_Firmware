@@ -4,10 +4,6 @@
 #include <stdint.h>
 #include "cJSON.h"
 
-void web_api_notify_change( void );
-uint32_t web_api_change_version( void );
-
-int32_t web_api_heartbeat_get( const cJSON *in, cJSON *out );
 int32_t web_api_ok_get( const cJSON *in, cJSON *out );
 
 int32_t web_api_halow_cfg_get( const cJSON *in, cJSON *out );
@@ -22,6 +18,9 @@ int32_t web_api_tcp_server_cfg_post( const cJSON *in, cJSON *out );
 int32_t web_api_lbt_cfg_get( const cJSON *in, cJSON *out );
 int32_t web_api_lbt_cfg_post( const cJSON *in, cJSON *out );
 
+int32_t web_api_cca_cfg_get( const cJSON *in, cJSON *out );
+int32_t web_api_cca_cfg_post( const cJSON *in, cJSON *out );
+
 int32_t web_api_telemetry_cfg_get( const cJSON *in, cJSON *out );
 int32_t web_api_telemetry_cfg_post( const cJSON *in, cJSON *out );
 int32_t web_api_telemetry_send_post( const cJSON *in, cJSON *out );
@@ -29,19 +28,40 @@ int32_t web_api_telemetry_send_post( const cJSON *in, cJSON *out );
 int32_t web_api_dev_stat_get( const cJSON *in, cJSON *out );
 int32_t web_api_radio_stat_get( const cJSON *in, cJSON *out );
 int32_t web_api_radio_stat_post( const cJSON *in, cJSON *out );
+int32_t web_api_cpu_dump_get( const cJSON *in, cJSON *out );
+int32_t web_api_tx_dbg_get( const cJSON *in, cJSON *out );
+int32_t web_api_rf_dbg_get( const cJSON *in, cJSON *out );
+int32_t web_api_rf_dbg_post( const cJSON *in, cJSON *out );
 
 int32_t web_api_online_ota_get( const cJSON *in, cJSON *out );
 int32_t web_api_online_ota_post( const cJSON *in, cJSON *out );
 
 int32_t web_api_stat_get( const cJSON *in, cJSON *out );
 int32_t web_api_all_get( const cJSON *in, cJSON *out );
+int32_t web_api_nearby_modems_get( const cJSON *in, cJSON *out );
+int32_t web_api_reticulum_links_get( const cJSON *in, cJSON *out );
 
 int32_t web_api_stat_reset( const cJSON *in, cJSON *out );
-int32_t web_api_ota_begin_post( const cJSON *in, cJSON *out );
-int32_t web_api_ota_chunk_post( const cJSON *in, cJSON *out );
-int32_t web_api_ota_end_post( const cJSON *in, cJSON *out );
-int32_t web_api_ota_write_post( const cJSON *in, cJSON *out );
+int32_t web_api_ota_wipe_lfs_post( const cJSON *in, cJSON *out );
+int32_t web_api_ota_file_begin_post( const cJSON *in, cJSON *out );
+int32_t web_api_ota_file_chunk_post( const cJSON *in, cJSON *out );
+int32_t web_api_ota_file_end_post( const cJSON *in, cJSON *out );
+int32_t web_api_ota_fw_begin_post( const cJSON *in, cJSON *out );
+int32_t web_api_ota_fw_chunk_post( const cJSON *in, cJSON *out );
+int32_t web_api_ota_fw_end_post( const cJSON *in, cJSON *out );
 int32_t web_api_reboot_post( const cJSON *in, cJSON *out );
 int32_t web_api_default_reset( const cJSON *in, cJSON *out );
+
+int32_t web_api_slip_cfg_get( const cJSON *in, cJSON *out );
+int32_t web_api_slip_cfg_post( const cJSON *in, cJSON *out );
+int32_t web_api_log_cfg_get( const cJSON *in, cJSON *out );
+int32_t web_api_log_cfg_post( const cJSON *in, cJSON *out );
+
+int32_t web_api_privacy_cfg_get( const cJSON *in, cJSON *out );
+int32_t web_api_privacy_cfg_post( const cJSON *in, cJSON *out );
+
+
+int32_t web_api_ack_cfg_get( const cJSON *in, cJSON *out );
+int32_t web_api_ack_cfg_post( const cJSON *in, cJSON *out );
 
 #endif // __CONFIG_API_CALLS_H__

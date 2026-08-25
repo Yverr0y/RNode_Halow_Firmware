@@ -8,6 +8,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+const uint8_t mac_broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
 static uint32_t utils_mask_to_prefix( const ip4_addr_t *mask ){
     uint32_t m = lwip_ntohl(ip4_addr_get_u32(mask));
     uint32_t p = 0;
@@ -46,8 +48,9 @@ bool utils_cidr_to_mask( const char *s, ip4_addr_t *mask ){
 
     slash = strchr(s, '/');
     if (slash != NULL) {
-        unsigned long p = strtoul(slash + 1, NULL, 10);
-        if (p > 32ul) {
+        char *endp = NULL;
+        unsigned long p = strtoul(slash + 1, &endp, 10);
+        if (endp == slash + 1 || *endp != '\0' || p > 32ul) {
             return false;
         }
         prefix = (uint32_t)p;
@@ -113,16 +116,6 @@ int64_t get_time_us( void ){
     
     return (j1 * (MICROSECONDS_PER_SECOND / OS_HZ)) +
            (int64_t)(sub / 192U);
-}
-
-void get_mac(uint8_t mac[6]){
-    static uint8_t smac[6];
-    static bool intitialized = false;
-    if(!intitialized){
-        sysctrl_efuse_mac_addr_calc(smac);
-        intitialized = true;
-    }
-    memcpy(mac, smac, sizeof(smac));
 }
 
 void bin16_to_hex32( const uint8_t *in, char *out ){

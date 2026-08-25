@@ -8,15 +8,18 @@
 </head>
 <body>
     <nav class="tabs">
-        <button type="button" data-tab="dashboard" class="active">Dashboard</button>
+        <button type="button" data-tab="dashboard">Dashboard</button>
         <button type="button" data-tab="settings">Device Settings</button>
         <button type="button" data-tab="telemetry">Telemetry</button>
+        <button type="button" data-tab="nearby">Nearby modems</button>
+        <button type="button" data-tab="reticulum">Reticulum</button>
         <button type="button" data-tab="firmware">Firmware Update</button>
     </nav>
 
     <main>
-        <section id="dashboard" class="tab-content active">
-            <h2>Radio Statistics</h2>
+        <section id="dashboard" class="tab-content">
+            <div class="panel">
+                <h3>Radio Statistics</h3>
             <table class="stats-table">
                 <tbody>
                 <tr><th>RX bytes</th><td id="stat_rx_bytes">--</td></tr>
@@ -35,20 +38,27 @@
             <div class="panel-actions">
                 <button type="button" id="stat_reset_btn">Reset statistics</button>
             </div>
+            </div>
 
-            <h2>Device Statistics</h2>
+            <div class="panel">
+                <h3>Device Statistics</h3>
             <table class="stats-table">
                 <tbody>
+                <tr><th>Chip temperature</th><td id="stat_chip_temp">--</td></tr>
+                <tr><th>Supply voltage</th><td id="stat_vcc">--</td></tr>
+                <tr><th>Core voltage 1.3B</th><td id="stat_vdd13b">--</td></tr>
+                <tr><th>Core voltage 1.3C</th><td id="stat_vdd13c">--</td></tr>
                 <tr><th>Uptime</th><td id="stat_uptime">--</td></tr>
 				<tr><th>CPU usage</th><td id="stat_cpu">--</td></tr>
 				<tr><th>Heap</th><td id="stat_heap">--</td></tr>
                 <tr><th>Hostname</th><td id="stat_hostname">--</td></tr>
                 <tr><th>IP address</th><td id="stat_ip">--</td></tr>
-                <tr><th>MAC address</th><td id="stat_mac">--</td></tr>
+                <tr><th>MAC Ethernet</th><td id="stat_mac">--</td></tr>
                 <tr><th>Firmware version</th><td id="stat_fwver">--</td></tr>
                 <tr><th>Flash size</th><td id="stat_flashs">--</td></tr>
                 </tbody>
             </table>
+            </div>
         </section>
 
         <section id="settings" class="tab-content">
@@ -56,14 +66,16 @@
                 <h3>RF Settings</h3>
                 <label>
                     <span>TX power (dBm)</span>
-                    <input type="number" id="halow_power_dbm" min="1" max="20">
+                    <input type="number" id="halow_power_dbm" min="1" max="25">
                 </label>
+                <p class="note">Valid values: 1-25 dBm.</p>
                 <label>
                     <span>Central frequency (MHz)</span>
-                    <input type="number" id="halow_central_freq" min="750" max="950" step="0.1">
+                    <input type="number" id="halow_central_freq" min="730" max="1080" step="0.1">
                 </label>
+                <p class="note">Valid values: 730-1080 MHz.</p>
                 <label>
-                    <span>MCS index</span>
+                    <span>Broadcast MCS index</span>
                     <select id="halow_mcs_index">
                         <option value="MCS10">MCS10</option>
                         <option value="MCS0">MCS0</option>
@@ -76,6 +88,7 @@
                         <option value="MCS7">MCS7</option>
                     </select>
                 </label>
+                <p class="note" id="halow_mcs10_note" style="display:none">MCS10 has a ~470 byte payload limit. Packets are fragmented into 2 parts, which may reduce delivery reliability.</p>
                 <label>
                     <span>Bandwidth</span>
                     <select id="halow_bandwidth">
@@ -84,10 +97,6 @@
                         <option value="4 MHz">4&nbsp;MHz</option>
                         <option value="8 MHz">8&nbsp;MHz</option>
                     </select>
-                </label>
-                <label class="toggle-label">
-                    <span>TX super power</span>
-                    <input type="checkbox" id="halow_super_power">
                 </label>
                 <div class="panel-actions">
                     <button type="button" id="save_halow" disabled>Save</button>
@@ -114,83 +123,139 @@
                             <tbody>
                                 <tr>
                                     <th>1 MHz</th>
-                                    <td>0.5</td>
-                                    <td>0.5</td>
-                                    <td>0.7</td>
-                                    <td>0.9</td>
-                                    <td>1.3</td>
-                                    <td>1.6</td>
+                                    <td>0.27</td>
+                                    <td>0.55</td>
+                                    <td>0.83</td>
+                                    <td>1.1</td>
                                     <td>1.7</td>
-                                    <td>1.8</td>
-                                    <td>N/A</td>
+                                    <td>2.2</td>
+                                    <td>2.5</td>
+                                    <td>2.8</td>
+                                    <td>0.12</td>
                                 </tr>
                                 <tr>
                                     <th>2 MHz</th>
-                                    <td>0.6</td>
-                                    <td>1.0</td>
-                                    <td>1.5</td>
-                                    <td>1.7</td>
-                                    <td>2.3</td>
-                                    <td>2.7</td>
-                                    <td>2.9</td>
-                                    <td>2.9</td>
+                                    <td>0.53</td>
+                                    <td>1.2</td>
+                                    <td>1.8</td>
+                                    <td>2.5</td>
+                                    <td>3.7</td>
+                                    <td>4.8</td>
+                                    <td>5.3</td>
+                                    <td>5.9</td>
                                     <td>—</td>
                                 </tr>
                                 <tr>
                                     <th>4 MHz</th>
-                                    <td>1.1</td>
-                                    <td>1.8</td>
-                                    <td>2.4</td>
-                                    <td>2.8</td>
-                                    <td>3.4</td>
-                                    <td>3.9</td>
-                                    <td>4.0</td>
-                                    <td>4.0</td>
+                                    <td>1.3</td>
+                                    <td>2.6</td>
+                                    <td>3.8</td>
+                                    <td>5.0</td>
+                                    <td>7.2</td>
+                                    <td>9.3</td>
+                                    <td>10.2</td>
+                                    <td>11.2</td>
                                     <td>—</td>
                                 </tr>
                                 <tr>
                                     <th>8 MHz</th>
-                                    <td>1.9</td>
-                                    <td>2.9</td>
-                                    <td>3.4</td>
-                                    <td>4.0</td>
-                                    <td>4.1</td>
-                                    <td>4.6</td>
-                                    <td>4.7</td>
-                                    <td>4.8</td>
+                                    <td>2.8</td>
+                                    <td>5.3</td>
+                                    <td>7.7</td>
+                                    <td>9.9</td>
+                                    <td>13.8</td>
+                                    <td>17.1</td>
+                                    <td>18.7</td>
+                                    <td>20.0</td>
                                     <td>—</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
-                    <p class="throughput-note">Devices using different MCS values can still see each other and communicate. MCS affects throughput and radio robustness, not interoperability.</p>
+                    <p class="throughput-note">Measured with max MTU for each mode. Smaller payload sizes give significantly lower throughput due to per-frame overhead.</p>
                 </div>
 
             </div>
 
             <div class="panel">
-                <h3>Listen Before Talk (LBT)</h3>
-                <fieldset id="lbt_fields">
-                    <h4>Channel airtime limit</h4>
-                    <label class="toggle-label">
-                        <span>Enable airtime limit</span>
-                        <input type="checkbox" id="lbt_uen">
-                    </label>
-                    <label>
-                        <span>Airtime max (%)</span>
-                        <input type="number" id="lbt_umax" min="0" max="100">
-                    </label>
-                </fieldset>
+                <h3>LBT Settings</h3>
+                <label class="toggle-label">
+                    <span>CCA enabled</span>
+                    <input type="checkbox" id="cca_en">
+                </label>
+                <p class="note">Disabling may cause high collision rate, try change threshold settings before disable.</p>
+                <label>
+                    <span>Sensitivity</span>
+                    <input type="number" id="cca_sens" min="0" max="10" value="5">
+                </label>
+                <p class="note">Valid values: 0-10. 0 - tolerant (ignore activity on channel), 10 - strict (TX only when silence).</p>
+                <label>
+                    <span>Threshold mode</span>
+                    <select id="cca_thdyn">
+                        <option value="0">Fixed</option>
+                        <option value="1">Dynamic (based on noise floor)</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Airtime force TX (%)</span>
+                    <input type="number" id="cca_ftpct" min="0.1" max="100" step="0.1" value="0.1">
+                </label>
+                <p class="note">Valid values: 0-100%. Minimum duty cycle: guarantees forced TX at regular intervals even in busy channel.</p>
+                <label>
+                    <span>Airtime limit (%)</span>
+                    <input type="number" id="cca_dlpct" min="0" max="100" step="0.1" value="100">
+                </label>
+                <p class="note">Valid values: 0-100%. Maximum airtime. 100% = no limit. Limits TX time even on free channel.</p>
                 <div class="panel-actions">
                     <button type="button" id="save_lbt" disabled>Save</button>
                 </div>
             </div>
 
             <div class="panel">
+                <h3>ACK (ARQ) Settings</h3>
+                <p class="note">Unicast data frames are retransmitted until the peer acknowledges them. Set retries to 0 to send without delivery guarantee.</p>
+                <label>
+                    <span>Max retries</span>
+                    <input type="number" id="ack_retries" min="0" max="8" value="3">
+                </label>
+                <p class="note">0 = NOACK (fire-and-forget). Frames that exhaust the retry budget are dropped.</p>
+                <label class="toggle-label" id="ra_panel">
+                    <span>Rate adaptation</span>
+                    <input type="checkbox" id="ack_rate_adapt">
+                </label>
+                <p class="note">Automatically steps the radio rate up on a clean link and down under loss. Thresholds and pacing (max 1 step per second) are tuned by the firmware.</p>
+                <p class="note panel-warn" id="ra_warn" style="display:none;color:#a00;font-weight:bold">Requires ACK: set Max retries above 0.</p>
+
+                <hr style="margin:14px 0;border:none;border-top:1px solid #ddd">
+                <label class="toggle-label">
+                    <span>Frame aggregation</span>
+                    <input type="checkbox" id="ack_agg" checked>
+                </label>
+                <p class="note">Packs several frames for the same peer into one RF frame. Improves throughput; disable only to debug.</p>
+                <label>
+                    <span>Broadcast repeat count</span>
+                    <input type="number" id="ack_bc_repeat" min="1" max="3" value="2">
+                </label>
+                <p class="note">Broadcast frames (announces, link bootstrap) get no ACK, so repeats are their only loss protection. 2 = send each broadcast twice (default), 3 = most robust (poor conditions), 1 = off.</p>
+
+                <div class="panel-actions">
+                    <button type="button" id="save_ack" disabled>Save</button>
+                </div>
+            </div>
+
+            <div class="panel">
                 <h3>Network Settings</h3>
                 <label class="toggle-label">
-                    <span>Enable DHCP</span>
+                    <span>DHCP client</span>
                     <input type="checkbox" id="net_dhcp">
+                </label>
+                <!-- DHCP server: hidden until the firmware side is fixed (does
+                     not work on real hardware yet). Element stays in the DOM
+                     so main.js keeps working; display:none because the base
+                     label rule (display:flex) would override the hidden attr -->
+                <label class="toggle-label" style="display:none">
+                    <span>DHCP server</span>
+                    <input type="checkbox" id="net_dhcp_srv">
                 </label>
                 <fieldset id="net_fields">
                     <label>
@@ -208,6 +273,52 @@
                 </fieldset>
                 <div class="panel-actions">
                     <button type="button" id="save_net" disabled>Save</button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>SLIP Settings</h3>
+                <label class="toggle-label">
+                    <span>Enable SLIP</span>
+                    <input type="checkbox" id="slip_enable">
+                </label>
+                <fieldset id="slip_fields">
+                    <label>
+                        <span>Baud rate</span>
+                        <input type="number" id="slip_baud" min="1" step="1">
+                    </label>
+                    <label>
+                        <span>Static IP address</span>
+                        <input type="text" id="slip_ip_address" spellcheck="false">
+                    </label>
+                    <label>
+                        <span>Gateway address</span>
+                        <input type="text" id="slip_gw_address" spellcheck="false">
+                    </label>
+                </fieldset>
+                <div class="panel-actions">
+                    <button type="button" id="save_slip" disabled>Save</button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>UDP Log Settings</h3>
+                <label class="toggle-label">
+                    <span>Enable UDP logs</span>
+                    <input type="checkbox" id="log_udp_enable">
+                </label>
+                <fieldset id="log_udp_fields">
+                    <label>
+                        <span>Destination IP address</span>
+                        <input type="text" id="log_udp_host" spellcheck="false">
+                    </label>
+                    <label>
+                        <span>Destination port</span>
+                        <input type="number" id="log_udp_port" min="1" max="65535" step="1">
+                    </label>
+                </fieldset>
+                <div class="panel-actions">
+                    <button type="button" id="save_log" disabled>Save</button>
                 </div>
             </div>
 
@@ -294,11 +405,11 @@
                     </label>
                     <label>
                         <span>MQTT username</span>
-                        <input type="text" id="telemetry_usr" spellcheck="false">
+                        <input type="text" id="telemetry_usr" spellcheck="false" autocomplete="off">
                     </label>
                     <label>
                         <span>MQTT password</span>
-                        <input type="password" id="telemetry_pwd" spellcheck="false">
+                        <input type="password" id="telemetry_pwd" spellcheck="false" autocomplete="new-password">
                     </label>
                     <label>
                         <span>MQTT topic</span>
@@ -328,33 +439,172 @@
             </div>
         </section>
 
-        <section id="firmware" class="tab-content">
+
+        <section id="nearby" class="tab-content">
             <div class="panel">
-                <h3>Firmware Update (DO NOT WORK FOR NOW)</h3>
+                <h3>Privacy</h3>
+                <label>
+                    <span>MAC rotation interval</span>
+                    <select id="privacy_mac_rotation">
+                        <option value="0">Disabled</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="360">6 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440">24 hours</option>
+                        <option value="4320">3 days</option>
+                    </select>
+                </label>
+                <label class="toggle-label">
+                    <span>Anonymous source MAC (FF:FF:FF:FF:FF:FF)</span>
+                    <input type="checkbox" id="privacy_mac_broadcast">
+                </label>
+                <p class="note">MAC rotation periodically generates a new random source address, making your device harder to track across sessions. The anonymous source MAC sets all transmitted frames to FF:FF:FF:FF:FF:FF. These two options are mutually exclusive — enabling one will disable the other.</p>
+                <p class="note"><strong>Important:</strong> MAC rotation is not recommended for stationary nodes. Changing your address may break delivery confirmations for established links. The anonymous MAC (FF:FF:FF:FF:FF:FF) disables delivery confirmations entirely, which may reduce link reliability. MAC rotation is primarily useful for portable nodes. Neither random MAC nor rotation makes you invisible on the radio channel — with an SDR and a directional antenna, there is no difference in time to detect the signal source.</p>
+                <div class="panel-actions">
+                    <button type="button" id="save_privacy" disabled>Save</button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>Nearby modems</h3>
+
+                <table class="stats-table nearby-summary-table">
+                    <tbody>
+                    <tr><th>WiFi MAC</th><td id="nearby_self_mac">--</td></tr>
+                    <tr><th>Heard devices</th><td id="nearby_count">--</td></tr>
+                    </tbody>
+                </table>
+
+                <div class="nearby-table-wrap">
+                    <table class="stats-table nearby-table">
+                        <thead>
+                            <tr>
+                                <th data-key="mac">MAC</th>
+                                <th data-key="rxRssi">RX RSSI</th>
+                                <th data-key="rxSnr">RX SNR</th>
+                                <th data-key="rxMcs">RX MCS</th>
+                                <th data-key="txMcs">TX MCS</th>
+                                <th data-key="txLoss">TX Loss</th>
+                                <th data-key="txEvm">TX EVM</th>
+                                <th data-key="rxPackets">RX Pkts</th>
+                                <th data-key="txPackets">TX Pkts</th>
+                                <th data-key="rxBytes">RX Data</th>
+                                <th data-key="txBytes">TX Data</th>
+                                <th data-key="rxRate">RX Rate</th>
+                                <th data-key="txRate">TX Rate</th>
+                                <th data-key="rxLast">Last RX</th>
+                                <th data-key="txLast">Last TX</th>
+                            </tr>
+                        </thead>
+                        <tbody id="nearby_table_body">
+                            <tr><td colspan="15">--</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section id="reticulum" class="tab-content">
+            <div class="panel">
+                <h3>Reticulum</h3>
+
+                <table class="stats-table nearby-summary-table">
+                    <tbody>
+                    <tr><th>Links</th><td id="reticulum_count">--</td></tr>
+                    </tbody>
+                </table>
+
+                <div class="nearby-table-wrap">
+                    <table class="stats-table reticulum-table">
+                        <thead>
+                            <tr>
+                                <th data-key="id">ID</th>
+                                <th data-key="remoteMac">Remote MAC</th>
+                                <th data-key="destination">Destination</th>
+                                <th data-key="state">State</th>
+                                <th data-key="rxBytes">RX Data</th>
+                                <th data-key="txBytes">TX Data</th>
+                                <th data-key="rxPackets">RX Packets</th>
+                                <th data-key="txPackets">TX Packets</th>
+                                <th data-key="lastRx">Last RX</th>
+                                <th data-key="lastTx">Last TX</th>
+                                <th data-key="rxRate">RX Rate</th>
+                                <th data-key="txRate">TX Rate</th>
+                                <th data-key="mtu">MTU</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reticulum_table_body">
+                            <tr><td colspan="13">--</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section id="firmware" class="tab-content">
+
+            <div class="panel">
+                <h3>Check for Update</h3>
 
                 <label>
                     <span>Current firmware version</span>
                     <span id="fw_current">--</span>
                 </label>
 
+                <label class="toggle-label">
+                    <span>Include beta versions</span>
+                    <input type="checkbox" id="fw_beta_toggle">
+                </label>
+
+                <div class="panel-actions panel-actions-wrap">
+                    <button type="button" id="fw_check_updates" class="secondary">Check for updates</button>
+                </div>
+
+                <div id="fw_updates_container" style="display: none;">
+                    <label>
+                        <span>Available versions</span>
+                        <select id="fw_version_select">
+                            <option value="">Loading...</option>
+                        </select>
+                    </label>
+                    <p class="field-hint" id="fw_version_info">--</p>
+                    <p style="margin: 0;"><a href="https://github.com/I-AM-ENGINEER/RNode_Halow_Firmware/releases" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
+                    <div class="panel-actions panel-actions-wrap">
+                        <button type="button" id="fw_download_only" disabled>Download</button>
+                    </div>
+                    <div id="fw_check_status" class="status-message" aria-live="polite"></div>
+                </div>
+
+            </div>
+
+            <div class="panel">
+                <h3>Firmware Update</h3>
+
+                <div class="panel warning-panel" style="margin-bottom: 0.75rem;">
+                    <h4 class="warning-title" style="margin: 0 0 0.3rem;">⚠ Warning</h4>
+                    <p class="warning-text" style="margin: 0;">Do not reload or close this page, or power off the device during firmware flash. Interrupting the process may damage the device.</p>
+                </div>
+
                 <label>
-                    <span>Firmware file</span>
-                    <input id="fw_file" type="file" accept=".bin,.img,.fw,.uf2,application/octet-stream">
+                    <span>Firmware archive</span>
+                    <input id="webota_file" type="file" accept=".tar,application/x-tar">
                 </label>
 
                 <label>
                     <span>Console</span>
                 </label>
-
-                <div id="fw_console" class="fw-console"></div>
+                <div id="webota_console" class="fw-console"></div>
 
                 <div class="panel-actions panel-actions-wrap">
-                    <button type="button" id="fw_flash" disabled>Flash</button>
+                    <button type="button" id="webota_flash" disabled>Flash Firmware</button>
                     <button type="button" id="fw_reboot" class="secondary">Reboot device</button>
                     <button type="button" id="fw_factory_reset" class="danger">Factory reset</button>
                 </div>
-                <div id="fw_action_status" class="status-message" aria-live="polite"></div>
+                <div id="webota_status" class="status-message" aria-live="polite"></div>
             </div>
+
         </section>
     </main>
 
