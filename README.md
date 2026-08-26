@@ -15,63 +15,36 @@ Firmware flasher: https://github.com/I-AM-ENGINEER/RNode_Halow_OTA_Flasher
 
 The following is currently implemented:
 
-- Broadcast packet transmission and reception over LMAC WiFi HaLow
+- Compatible with reticulum and any client (Meshchat, Sideband, Columba, Nomandnet, etc...) 
+- Broadcast packet transmission and reception LMAC WiFi HaLow
+- Unicast with retries for Link packages (auto detection)
 - DHCP client or static IP
 - Real-time statistics
 - Frequency and modulation parameter selection
-- TCP server
-- OTA firmware update (unencrypted)
-- Confirmed compatibility with RNS and its extensions — Meshchat, Sideband
-- LBT (Listen Before Talk)
-- Airtime limiting (currently broken)
+- OTA firmware update from web page
+- LBT with CCA and airtime limit
+- SLIP for connection over UART
+- Integration with MQTT for transmit node install position and statistics
+- Auto rate adaptation based on signal level
 
 ### What Is Currently Missing
 
-- USB, UART, SPI connection support not implemented
-- The LMAC stack remains a mystery; ideally the proprietary libs would be replaced
+- USB, SPI connection support not implemented
+- No DHCP server for easy connection with limited devices (phones with usb-ethernet)
+- MCS10 isnt stable enough
 
 ### Default Parameters
 
-- **Frequency:** 866–867 MHz (1 MHz channel width)
+- **Frequency:** 864–865 MHz (1 MHz channel width)
 - **PHY:** WiFi MCS0
-- **Power:** 17 dBm
-- **TCP Port:** 8001
-
-### Dashboard
-
-- **RX/TX Bytes, Packets, Speed** — self-explanatory
-- **Airtime** — percentage of time the device is transmitting
-- **Channel Utilization** — how busy the airwaves are
-- **Noise Floor Power Level** — approximate noise level
+- **Power:** 14 dBm (25 mW)
+- **TCP Port:** 4242
 
 ### Device Settings
 
-<img width="968" height="1119" alt="image" src="https://github.com/user-attachments/assets/9a2c8310-06eb-45e2-8b96-3638ed505c0a" />
+Device can be configured with HTTP web page on port 80
 
-#### RF Settings
-
-- **TX Power** — transmitter output power, max 20 dBm
-- **Central Frequency** — operating frequency
-- **MCS Index** — modulation/coding scheme; MCS0 has the longest range, MCS7 is the fastest. MCS10 is theoretically the most range-efficient but currently only MCS0 works reliably
-- **Bandwidth** — channel width; currently only 1 and 2 MHz work
-- **TX Super Power** — increases transmitter power (theoretically up to 25 dBm); long-term safety is unknown
-
-#### Listen Before Talk
-
-All devices support LBT by default. (not work for now) You can additionally limit the maximum airtime the device occupies to reduce collisions. 30–50% is optimal.
-
-#### Network Settings
-
-If you don't know what this is for, leave it alone — you can lock yourself out.
-
-#### TCP Radio Bridge
-
-By default, anyone can connect to the TCP port and send data directly over the air. To restrict this, set a whitelist of devices allowed to connect to the socket. Examples:
-
-- `192.168.1.0/24` — allow all devices on the 192.168.1.x subnet
-- `192.168.1.X/32` — allow only a single specific device
-
-The **Client** field shows who is currently connected to the socket; only one connection at a time is allowed. Refreshes only on page reload.
+<img width="1492" height="2102" alt="Screenshot_1" src="https://github.com/user-attachments/assets/9a15407e-d534-4f44-bf0b-7dbb65177d5f" />
 
 ### Reticulum Configuration
 
@@ -83,27 +56,13 @@ Add the following to your Reticulum interfaces config. The IP address can be fou
       target_host = 192.168.XXX.XXX
       target_port = 8001
 
-### Meshchat Setup
-
-Go to **Interfaces** → **Add Interface** → type **TCP Client Interface** → enter the node IP in **Target Host**, port `8001` (or as configured in the web configurator).
-
-<img width="570" height="593" alt="image" src="https://github.com/user-attachments/assets/d524da22-9a19-46bf-a187-aec61b444c5a" />
-
-
-### Sideband Setup
-
-Go to **Connectivity** → **Connect via TCP** → enter the node IP in **Target Host**, port `8001` (or as configured in the web configurator).
-
-<img width="543" height="449" alt="image" src="https://github.com/user-attachments/assets/0e0b5456-d7bd-49c9-a009-d92f3819d335" />
-
-
 ### For Developers
 
 To get started quickly, install the Taixin CDK and open the project in the `project` folder. All necessary tooling is included in CDK.
 
 Logs are output via UART (IO12, IO13) at **2,000,000 baud** (blocking logs).
 
-For full debugging, use a Blue Pill flashed as CKLink. The chip **must** be STM32F103C8 — C6 will not work, and Chinese suppliers often ship rejected/cloned chips with broken USB.
+For full debugging, use a Blue Pill flashed as CKLink or Chinese CKLink clones. The chip **must** be STM32F103C8 — C6 will not work, and Chinese suppliers often ship rejected/cloned chips with broken USB.
 
 #### Flashing via CKLink (EIDE / CLI)
 
