@@ -30,6 +30,10 @@ CXX=$(COMPILER_DIR)/bin/csky-elfabiv2-g++$(EXE)
 LD=$(COMPILER_DIR)/bin/csky-elfabiv2-gcc$(EXE)
 AR=$(COMPILER_DIR)/bin/csky-elfabiv2-ar$(EXE)
 
+# build_info mode: beta (default, local) appends 'b' to FW_VERSION and enables
+# debug web endpoints; release produces a clean 'FW_VERSION (date)' string.
+BUILD_MODE ?= beta
+
 ###########################
 # targets
 ###########################
@@ -55,7 +59,7 @@ clean:
 prebuild:
 	@printf "$(COLOR_INF)prebuild ...$(COLOR_END)\n"
 	python tests/ack/run_small.py
-	python pack/build_info.py beta
+	python pack/build_info.py $(BUILD_MODE)
 	rm -rf "out" && mkdir "out"
 
 ./build/Debug/.obj/csky/csi_kernel/rhino/adapter:
