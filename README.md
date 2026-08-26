@@ -44,8 +44,6 @@ The following is currently implemented:
 
 Device can be configured with HTTP web page on port 80
 
-<img width="1492" height="2102" alt="Screenshot_1" src="https://github.com/user-attachments/assets/9a15407e-d534-4f44-bf0b-7dbb65177d5f" />
-
 ### Reticulum Configuration
 
 Add the following to your Reticulum interfaces config. The IP address can be found via your router's DHCP server — the device hostname is `RNode-Halow-XXXXXX`, where `XXXXXX` is the last 3 bytes of the MAC address, or via `RNode-HaLow Flasher.exe`.
@@ -54,7 +52,7 @@ Add the following to your Reticulum interfaces config. The IP address can be fou
       type = TCPClientInterface
       enabled = yes
       target_host = 192.168.XXX.XXX
-      target_port = 8001
+      target_port = 4242
 
 ### For Developers
 
@@ -127,7 +125,7 @@ IP-адрес можно узнать через DHCP-сервер на роут
     type = TCPClientInterface
     enabled = yes
     target_host = 192.168.XXX.XXX
-    target_port = 8001
+    target_port = 4242
 ```
 
 ### Для разработчиков
