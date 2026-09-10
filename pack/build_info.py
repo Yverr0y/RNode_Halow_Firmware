@@ -8,27 +8,16 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HDR_PATH = ROOT / "inc" / "build_info_gen.h"
-NUM_PATH = ROOT / "build_number.txt"
 
 
 def build_header(mode: str) -> str:
     date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if mode == "beta":
-        try:
-            num = int(NUM_PATH.read_text(encoding="ascii").strip())
-        except Exception:
-            num = 0
-        num += 1
-        try:
-            NUM_PATH.write_text(f"{num}\n", encoding="ascii")
-        except Exception:
-            pass
+        # 'b' marks a local/beta build (debug web endpoints enabled); no number.
         defs = (
             "#define FW_BUILD_BETA       1\n"
-            f"#define FW_BUILD_NUMBER     {num}\n"
-            f'#define FW_BUILD_NUMBER_STR "{num}"\n'
             f'#define FW_BUILD_DATE       "{date}"\n'
-            '#define FW_BUILD_VERSION    FW_VERSION "b" FW_BUILD_NUMBER_STR " (" FW_BUILD_DATE ")"\n'
+            '#define FW_BUILD_VERSION    FW_VERSION "b" " (" FW_BUILD_DATE ")"\n'
         )
     else:
         defs = (
